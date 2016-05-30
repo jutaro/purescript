@@ -547,17 +547,9 @@ bundle :: (Applicative m, MonadError ErrorMessage m)
      -> Maybe String -- ^ An optional main
      -> String -- ^ The namespace (e.g. PS).
      -> Maybe FilePath -- ^ The require path prefix
-     -> Maybe String
+     -> Bool
      -> m String
-bundle inputStrs entryPoints mainModule namespace requirePath optimize = do
-  let shouldUncurry = case optimize of
-                        Nothing -> False
-                        Just "uncurry" -> True
-                        Just "u" -> True
-                        Just "all" -> True
-                        Just "a" -> True
-                        Just _ -> False
-      secondRun = True
+bundle inputStrs entryPoints mainModule namespace requirePath shouldUncurry = do
   input <- forM inputStrs $ \(ident, js) -> do
                 ast <- either (throwError . ErrorInModule ident . UnableToParseModule) pure $ parse js (moduleName ident)
                 return (ident, ast)
@@ -568,14 +560,17 @@ bundle inputStrs entryPoints mainModule namespace requirePath optimize = do
 
   let compiled = compile modules entryPoints
 
+  -- The uncurry optimization performs dead code elemination (DCE) once and then
+  -- generates uncurried variants of the surviving functions. We need to
+  -- perform DCE again to throw away variants (curried or uncurried) that
+  -- aren't called after choosing the appropriate variant for each call site.
+  -- This two-step process avoids generating variants for functions that
+  -- are dead weight anyway.
   compiled' <- if shouldUncurry
                     then do
                         let modules' = uncurryFunc compiled entryPoints
-                        if secondRun
-                            then do
-                                modules'' <- traverse (fmap withDeps . pure) modules' -- traverse and compile again
-                                return (compile modules'' entryPoints)
-                            else return modules'
+                        modules'' <- traverse (fmap withDeps . pure) modules'   -- traverse and compile again
+                        return (compile modules'' entryPoints)
                     else return compiled
 
   let sorted   = sortModules (filter (not . isModuleEmpty) compiled')

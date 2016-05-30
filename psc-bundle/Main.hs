@@ -36,7 +36,7 @@ data Options = Options
   , optionsMainModule  :: Maybe String
   , optionsNamespace   :: String
   , optionsRequirePath :: Maybe FilePath
-  , optionsShouldUncurry :: Maybe String
+  , optionsShouldUncurry :: Maybe Bool
   } deriving Show
 
 -- | Given a filename, assuming it is in the correct place on disk, infer a ModuleIdentifier.
@@ -62,7 +62,7 @@ app Options{..} = do
     length js `seq` return (mid, js)                                            -- evaluate readFile till EOF before returning, not to exhaust file handles
 
   let entryIds = map (`ModuleIdentifier` Regular) optionsEntryPoints
-  bundle input entryIds optionsMainModule optionsNamespace optionsRequirePath optionsShouldUncurry
+  bundle input entryIds optionsMainModule optionsNamespace optionsRequirePath (fromMaybe False optionsShouldUncurry)
 
 -- | Command line options parser.
 options :: Parser Options
@@ -72,7 +72,7 @@ options = Options <$> some inputFile
                   <*> optional mainModule
                   <*> namespace
                   <*> optional requirePath
-                  <*> optional shouldUncurry
+                  <*> (optional (not <$> noShouldUncurry) <|> optional shouldUncurry)
   where
   inputFile :: Parser FilePath
   inputFile = strArgument $
@@ -110,11 +110,16 @@ options = Options <$> some inputFile
     <> long "require-path"
     <> help "The path prefix used in require() calls in the generated JavaScript [deprecated]"
 
-  shouldUncurry :: Parser String
-  shouldUncurry = strOption $
-       short 'p'
+  shouldUncurry :: Parser Bool
+  shouldUncurry = switch $
+       short 'O'
     <> long "optimize"
-    <> help "optimize uncurry or optimize u - When given this option psc-bundle will apply an uncurry optimization"
+    <> help "When given this option psc-bundle will apply an uncurry optimization"
+
+  noShouldUncurry :: Parser Bool
+  noShouldUncurry = switch $
+    long "no-optimize"
+    <> help "When given this option psc-bundle will prevent the uncurry optimization"
 
 -- | Make it go.
 main :: IO ()
