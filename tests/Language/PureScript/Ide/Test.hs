@@ -1,6 +1,7 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PackageImports    #-}
+{-# LANGUAGE DataKinds         #-}
 module Language.PureScript.Ide.Test where
 
 import           Control.Concurrent.STM
@@ -17,14 +18,16 @@ import           System.Process
 
 import qualified Language.PureScript             as P
 
-defConfig :: Configuration
+defConfig :: IdeConfiguration
 defConfig =
-  Configuration { confLogLevel = LogNone
-                , confOutputPath = "output/"
-                , confGlobs = ["src/*.purs"]
-                }
+  IdeConfiguration
+    { confLogLevel = LogNone
+    , confOutputPath = "output/"
+    , confGlobs = ["src/*.purs"]
+    , confEditorMode = False
+    }
 
-runIde' :: Configuration -> IdeState -> [Command] -> IO ([Either IdeError Success], IdeState)
+runIde' :: IdeConfiguration -> IdeState -> [Command] -> IO ([Either IdeError Success], IdeState)
 runIde' conf s cs = do
   stateVar <- newTVarIO s
   let env' = IdeEnvironment {ideStateVar = stateVar, ideConfiguration = conf}
@@ -35,11 +38,11 @@ runIde' conf s cs = do
 runIde :: [Command] -> IO ([Either IdeError Success], IdeState)
 runIde = runIde' defConfig emptyIdeState
 
-s3 :: IdeState -> [(Text, [IdeDeclarationAnn])] -> IdeState
-s3 s ds =
-  s {ideStage3 = stage3}
+volatileState :: IdeState -> [(Text, [IdeDeclarationAnn])] -> IdeState
+volatileState s ds =
+  s {ideVolatileState = vs}
   where
-    stage3 = Stage3 (Map.fromList decls) Nothing
+    vs = IdeVolatileState (AstData Map.empty) (Map.fromList decls) Nothing
     decls = map (first P.moduleNameFromString) ds
 
 -- | Adding Annotations to IdeDeclarations
@@ -63,11 +66,11 @@ ida = IdeDeclarationAnn emptyAnn
 ideValue :: Text -> Maybe P.Type -> IdeDeclarationAnn
 ideValue i ty = ida (IdeDeclValue (IdeValue (P.Ident i) (fromMaybe P.tyString ty)))
 
-ideType :: Text -> Maybe P.Kind -> IdeDeclarationAnn
-ideType pn ki = ida (IdeDeclType (IdeType (P.ProperName pn) (fromMaybe P.kindType ki)))
+ideType :: Text -> Maybe P.Kind -> [(P.ProperName 'P.ConstructorName, P.Type)] -> IdeDeclarationAnn
+ideType pn ki dtors = ida (IdeDeclType (IdeType (P.ProperName pn) (fromMaybe P.kindType ki) dtors))
 
-ideSynonym :: Text -> P.Type -> P.Kind -> IdeDeclarationAnn
-ideSynonym pn ty kind = ida (IdeDeclTypeSynonym (IdeTypeSynonym (P.ProperName pn) ty kind))
+ideSynonym :: Text -> Maybe P.Type -> Maybe P.Kind -> IdeDeclarationAnn
+ideSynonym pn ty kind = ida (IdeDeclTypeSynonym (IdeTypeSynonym (P.ProperName pn) (fromMaybe P.tyString ty) (fromMaybe P.kindType kind)))
 
 ideTypeClass :: Text -> P.Kind -> [IdeInstance] -> IdeDeclarationAnn
 ideTypeClass pn kind instances = ida (IdeDeclTypeClass (IdeTypeClass (P.ProperName pn) kind instances))
@@ -97,6 +100,17 @@ ideTypeOp opName ident precedence assoc k =
 
 ideKind :: Text -> IdeDeclarationAnn
 ideKind pn = ida (IdeDeclKind (P.ProperName pn))
+
+valueSS, synonymSS, typeSS, classSS, valueOpSS, typeOpSS :: P.SourceSpan
+valueSS = ss 3 1
+synonymSS = ss 5 1
+typeSS = ss 7 1
+classSS = ss 8 1
+valueOpSS = ss 12 1
+typeOpSS = ss 13 1
+
+ss :: Int -> Int -> P.SourceSpan
+ss x y = P.SourceSpan "Test.purs" (P.SourcePos x y) (P.SourcePos x y)
 
 mn :: Text -> P.ModuleName
 mn = P.moduleNameFromString

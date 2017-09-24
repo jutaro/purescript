@@ -12,19 +12,21 @@
 -- Type definitions for psc-ide
 -----------------------------------------------------------------------------
 
+{-# LANGUAGE DeriveGeneric   #-}
+{-# LANGUAGE DeriveAnyClass  #-}
 {-# LANGUAGE DeriveFoldable  #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Language.PureScript.Ide.Types where
 
-import           Protolude
+import           Protolude hiding (moduleName)
 
 import           Control.Concurrent.STM
 import           Control.Lens.TH
 import           Data.Aeson
-import qualified Data.Map.Lazy                       as M
-import qualified Language.PureScript                 as P
-import qualified Language.PureScript.Errors.JSON     as P
+import qualified Data.Map.Lazy as M
+import qualified Language.PureScript as P
+import qualified Language.PureScript.Errors.JSON as P
 
 type ModuleIdent = Text
 type ModuleMap a = Map P.ModuleName a
@@ -38,42 +40,43 @@ data IdeDeclaration
   | IdeDeclValueOperator IdeValueOperator
   | IdeDeclTypeOperator IdeTypeOperator
   | IdeDeclKind (P.ProperName 'P.KindName)
-  deriving (Show, Eq, Ord)
+  deriving (Show, Eq, Ord, Generic, NFData)
 
 data IdeValue = IdeValue
   { _ideValueIdent :: P.Ident
   , _ideValueType  :: P.Type
-  } deriving (Show, Eq, Ord)
+  } deriving (Show, Eq, Ord, Generic, NFData)
 
 data IdeType = IdeType
  { _ideTypeName :: P.ProperName 'P.TypeName
  , _ideTypeKind :: P.Kind
- } deriving (Show, Eq, Ord)
+ , _ideTypeDtors :: [(P.ProperName 'P.ConstructorName, P.Type)]
+ } deriving (Show, Eq, Ord, Generic, NFData)
 
 data IdeTypeSynonym = IdeTypeSynonym
   { _ideSynonymName :: P.ProperName 'P.TypeName
   , _ideSynonymType :: P.Type
   , _ideSynonymKind :: P.Kind
-  } deriving (Show, Eq, Ord)
+  } deriving (Show, Eq, Ord, Generic, NFData)
 
 data IdeDataConstructor = IdeDataConstructor
   { _ideDtorName     :: P.ProperName 'P.ConstructorName
   , _ideDtorTypeName :: P.ProperName 'P.TypeName
   , _ideDtorType     :: P.Type
-  } deriving (Show, Eq, Ord)
+  } deriving (Show, Eq, Ord, Generic, NFData)
 
 data IdeTypeClass = IdeTypeClass
   { _ideTCName :: P.ProperName 'P.ClassName
   , _ideTCKind :: P.Kind
   , _ideTCInstances :: [IdeInstance]
-  } deriving (Show, Eq, Ord)
+  } deriving (Show, Eq, Ord, Generic, NFData)
 
 data IdeInstance = IdeInstance
   { _ideInstanceModule      :: P.ModuleName
   , _ideInstanceName        :: P.Ident
   , _ideInstanceTypes       :: [P.Type]
   , _ideInstanceConstraints :: Maybe [P.Constraint]
-  } deriving (Show, Eq, Ord)
+  } deriving (Show, Eq, Ord, Generic, NFData)
 
 data IdeValueOperator = IdeValueOperator
   { _ideValueOpName          :: P.OpName 'P.ValueOpName
@@ -81,7 +84,7 @@ data IdeValueOperator = IdeValueOperator
   , _ideValueOpPrecedence    :: P.Precedence
   , _ideValueOpAssociativity :: P.Associativity
   , _ideValueOpType          :: Maybe P.Type
-  } deriving (Show, Eq, Ord)
+  } deriving (Show, Eq, Ord, Generic, NFData)
 
 data IdeTypeOperator = IdeTypeOperator
   { _ideTypeOpName          :: P.OpName 'P.TypeOpName
@@ -89,7 +92,7 @@ data IdeTypeOperator = IdeTypeOperator
   , _ideTypeOpPrecedence    :: P.Precedence
   , _ideTypeOpAssociativity :: P.Associativity
   , _ideTypeOpKind          :: Maybe P.Kind
-  } deriving (Show, Eq, Ord)
+  } deriving (Show, Eq, Ord, Generic, NFData)
 
 makePrisms ''IdeDeclaration
 makeLenses ''IdeValue
@@ -104,14 +107,14 @@ makeLenses ''IdeTypeOperator
 data IdeDeclarationAnn = IdeDeclarationAnn
   { _idaAnnotation  :: Annotation
   , _idaDeclaration :: IdeDeclaration
-  } deriving (Show, Eq, Ord)
+  } deriving (Show, Eq, Ord, Generic, NFData)
 
 data Annotation
   = Annotation
   { _annLocation       :: Maybe P.SourceSpan
   , _annExportedFrom   :: Maybe P.ModuleName
   , _annTypeAnnotation :: Maybe P.Type
-  } deriving (Show, Eq, Ord)
+  } deriving (Show, Eq, Ord, Generic, NFData)
 
 makeLenses ''Annotation
 makeLenses ''IdeDeclarationAnn
@@ -119,61 +122,68 @@ makeLenses ''IdeDeclarationAnn
 emptyAnn :: Annotation
 emptyAnn = Annotation Nothing Nothing Nothing
 
-type DefinitionSites a = Map IdeDeclNamespace a
+type DefinitionSites a = Map IdeNamespaced a
 type TypeAnnotations = Map P.Ident P.Type
 newtype AstData a = AstData (ModuleMap (DefinitionSites a, TypeAnnotations))
-  -- ^ SourceSpans for the definition sites of Values and Types aswell as type
+  -- ^ SourceSpans for the definition sites of values and types as well as type
   -- annotations found in a module
-  deriving (Show, Eq, Ord, Functor, Foldable)
+  deriving (Show, Eq, Ord, Generic, NFData, Functor, Foldable)
 
 data IdeLogLevel = LogDebug | LogPerf | LogAll | LogDefault | LogNone
   deriving (Show, Eq)
 
-data Configuration =
-  Configuration
+data IdeConfiguration =
+  IdeConfiguration
   { confOutputPath :: FilePath
   , confLogLevel   :: IdeLogLevel
   , confGlobs      :: [FilePath]
+  , confEditorMode :: Bool
   }
 
 data IdeEnvironment =
   IdeEnvironment
   { ideStateVar      :: TVar IdeState
-  , ideConfiguration :: Configuration
+  , ideConfiguration :: IdeConfiguration
   }
 
 type Ide m = (MonadIO m, MonadReader IdeEnvironment m)
 
 data IdeState = IdeState
-  { ideStage1 :: Stage1
-  , ideStage2 :: Stage2
-  , ideStage3 :: Stage3
+  { ideFileState     :: IdeFileState
+  , ideVolatileState :: IdeVolatileState
   } deriving (Show)
 
 emptyIdeState :: IdeState
-emptyIdeState = IdeState emptyStage1 emptyStage2 emptyStage3
+emptyIdeState = IdeState emptyFileState emptyVolatileState
 
-emptyStage1 :: Stage1
-emptyStage1 = Stage1 M.empty M.empty
+emptyFileState :: IdeFileState
+emptyFileState = IdeFileState M.empty M.empty
 
-emptyStage2 :: Stage2
-emptyStage2 = Stage2 (AstData M.empty)
+emptyVolatileState :: IdeVolatileState
+emptyVolatileState = IdeVolatileState (AstData M.empty) M.empty Nothing
 
-emptyStage3 :: Stage3
-emptyStage3 = Stage3 M.empty Nothing
 
-data Stage1 = Stage1
-  { s1Externs :: ModuleMap P.ExternsFile
-  , s1Modules :: ModuleMap (P.Module, FilePath)
+-- | @IdeFileState@ holds data that corresponds 1-to-1 to an entity on the
+-- filesystem. Externs correspond to the ExternsFiles the compiler emits into
+-- the output folder, and modules are parsed ASTs from source files. This means,
+-- that we can update single modules or ExternsFiles inside this state whenever
+-- the corresponding entity changes on the file system.
+data IdeFileState = IdeFileState
+  { fsExterns :: ModuleMap P.ExternsFile
+  , fsModules :: ModuleMap (P.Module, FilePath)
   } deriving (Show)
 
-data Stage2 = Stage2
-  { s2AstData :: AstData P.SourceSpan
-  } deriving (Show, Eq)
-
-data Stage3 = Stage3
-  { s3Declarations  :: ModuleMap [IdeDeclarationAnn]
-  , s3CachedRebuild :: Maybe (P.ModuleName, P.ExternsFile)
+-- | @IdeVolatileState@ is derived from the @IdeFileState@ and needs to be
+-- invalidated and refreshed carefully. It holds @AstData@, which is the data we
+-- extract from the parsed ASTs, as well as the IdeDeclarations, which contain
+-- lots of denormalized data, so they need to fully rebuilt whenever
+-- @IdeFileState@ changes. The vsCachedRebuild field can hold a rebuild result
+-- with open imports which is used to provide completions for module private
+-- declarations
+data IdeVolatileState = IdeVolatileState
+  { vsAstData       :: AstData P.SourceSpan
+  , vsDeclarations  :: ModuleMap [IdeDeclarationAnn]
+  , vsCachedRebuild :: Maybe (P.ModuleName, P.ExternsFile)
   } deriving (Show)
 
 newtype Match a = Match (P.ModuleName, a)
@@ -187,6 +197,7 @@ data Completion = Completion
   , complExpandedType  :: Text
   , complLocation      :: Maybe P.SourceSpan
   , complDocumentation :: Maybe Text
+  , complExportedFrom  :: [P.ModuleName]
   } deriving (Show, Eq, Ord)
 
 instance ToJSON Completion where
@@ -197,15 +208,16 @@ instance ToJSON Completion where
            , "expandedType" .= complExpandedType
            , "definedAt" .= complLocation
            , "documentation" .= complDocumentation
+           , "exportedFrom" .= map P.runModuleName complExportedFrom
            ]
 
 identifierFromDeclarationRef :: P.DeclarationRef -> Text
-identifierFromDeclarationRef (P.TypeRef name _) = P.runProperName name
-identifierFromDeclarationRef (P.ValueRef ident) = P.runIdent ident
-identifierFromDeclarationRef (P.TypeClassRef name) = P.runProperName name
-identifierFromDeclarationRef (P.KindRef name) = P.runProperName name
-identifierFromDeclarationRef (P.ValueOpRef op) = P.showOp op
-identifierFromDeclarationRef (P.TypeOpRef op) = P.showOp op
+identifierFromDeclarationRef (P.TypeRef _ name _) = P.runProperName name
+identifierFromDeclarationRef (P.ValueRef _ ident) = P.runIdent ident
+identifierFromDeclarationRef (P.TypeClassRef _ name) = P.runProperName name
+identifierFromDeclarationRef (P.KindRef _ name) = P.runProperName name
+identifierFromDeclarationRef (P.ValueOpRef _ op) = P.showOp op
+identifierFromDeclarationRef (P.TypeOpRef _ op) = P.showOp op
 identifierFromDeclarationRef _ = ""
 
 data Success =
@@ -305,11 +317,18 @@ instance ToJSON PursuitResponse where
       , "text"    .= text
       ]
 
-data IdeDeclNamespace =
-  -- | An identifier in the value namespace
-  IdeNSValue Text
-  -- | An identifier in the type namespace
-  | IdeNSType Text
-  -- | An identifier in the kind namespace
-  | IdeNSKind Text
-  deriving (Show, Eq, Ord)
+-- | Denotes the different namespaces a name in PureScript can reside in.
+data IdeNamespace = IdeNSValue | IdeNSType | IdeNSKind
+  deriving (Show, Eq, Ord, Generic, NFData)
+
+instance FromJSON IdeNamespace where
+  parseJSON (String s) = case s of
+    "value" -> pure IdeNSValue
+    "type"  -> pure IdeNSType
+    "kind"  -> pure IdeNSKind
+    _       -> mzero
+  parseJSON _ = mzero
+
+-- | A name tagged with a namespace
+data IdeNamespaced = IdeNamespaced IdeNamespace Text
+  deriving (Show, Eq, Ord, Generic, NFData)

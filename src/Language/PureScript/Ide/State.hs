@@ -12,28 +12,31 @@
 -- Functions to access psc-ide's state
 -----------------------------------------------------------------------------
 
-{-# LANGUAGE PackageImports        #-}
-{-# LANGUAGE TemplateHaskell       #-}
-{-# LANGUAGE NamedFieldPuns        #-}
+{-# LANGUAGE PackageImports  #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE NamedFieldPuns  #-}
+{-# LANGUAGE BangPatterns    #-}
 
 module Language.PureScript.Ide.State
   ( getLoadedModulenames
   , getExternFiles
   , resetIdeState
   , cacheRebuild
+  , cachedRebuild
   , insertExterns
   , insertModule
   , insertExternsSTM
   , getAllModules
-  , populateStage2
-  , populateStage3
-  , populateStage3STM
+  , populateVolatileState
+  , populateVolatileStateSync
+  , populateVolatileStateSTM
   -- for tests
   , resolveOperatorsForModule
   , resolveInstances
+  , resolveDataConstructorsForModule
   ) where
 
-import           Protolude
+import           Protolude hiding (moduleName)
 
 import           Control.Arrow
 import           Control.Concurrent.STM
@@ -52,9 +55,7 @@ import           Language.PureScript.Ide.Util
 resetIdeState :: Ide m => m ()
 resetIdeState = do
   ideVar <- ideStateVar <$> ask
-  liftIO . atomically $ do
-    writeTVar ideVar emptyIdeState
-    setStage3STM ideVar emptyStage3
+  liftIO (atomically (writeTVar ideVar emptyIdeState))
 
 -- | Gets the loaded Modulenames
 getLoadedModulenames :: Ide m => m [P.ModuleName]
@@ -62,7 +63,7 @@ getLoadedModulenames = Map.keys <$> getExternFiles
 
 -- | Gets all loaded ExternFiles
 getExternFiles :: Ide m => m (ModuleMap ExternsFile)
-getExternFiles = s1Externs <$> getStage1
+getExternFiles = fsExterns <$> getFileState
 
 -- | Insert a Module into Stage1 of the State
 insertModule :: Ide m => (FilePath, P.Module) -> m ()
@@ -74,51 +75,39 @@ insertModule module' = do
 insertModuleSTM :: TVar IdeState -> (FilePath, P.Module) -> STM ()
 insertModuleSTM ref (fp, module') =
   modifyTVar ref $ \x ->
-    x { ideStage1 = (ideStage1 x) {
-          s1Modules = Map.insert
+    x { ideFileState = (ideFileState x) {
+          fsModules = Map.insert
             (P.getModuleName module')
             (module', fp)
-            (s1Modules (ideStage1 x))}}
+            (fsModules (ideFileState x))}}
 
--- | Retrieves Stage1 from the State.
---  This includes loaded Externfiles
-getStage1 :: Ide m => m Stage1
-getStage1 = do
+-- | Retrieves the FileState from the State. This includes loaded Externfiles
+-- and parsed Modules
+getFileState :: Ide m => m IdeFileState
+getFileState = do
   st <- ideStateVar <$> ask
-  fmap ideStage1 . liftIO . readTVarIO $ st
+  ideFileState <$> liftIO (readTVarIO st)
 
--- | STM version of getStage1
-getStage1STM :: TVar IdeState -> STM Stage1
-getStage1STM ref = ideStage1 <$> readTVar ref
+-- | STM version of getFileState
+getFileStateSTM :: TVar IdeState -> STM IdeFileState
+getFileStateSTM ref = ideFileState <$> readTVar ref
 
--- | Retrieves Stage2 from the State.
-getStage2 :: Ide m => m Stage2
-getStage2 = do
-  st <- ideStateVar <$> ask
-  liftIO (atomically (getStage2STM st))
-
-getStage2STM ::  TVar IdeState -> STM Stage2
-getStage2STM ref = ideStage2 <$> readTVar ref
-
--- | STM version of setStage2
-setStage2STM :: TVar IdeState -> Stage2 -> STM ()
-setStage2STM ref s2 = do
-  modifyTVar ref $ \x ->
-    x {ideStage2 = s2}
-  pure ()
-
--- | Retrieves Stage3 from the State.
+-- | Retrieves VolatileState from the State.
 -- This includes the denormalized Declarations and cached rebuilds
-getStage3 :: Ide m => m Stage3
-getStage3 = do
+getVolatileState :: Ide m => m IdeVolatileState
+getVolatileState = do
   st <- ideStateVar <$> ask
-  fmap ideStage3 . liftIO . readTVarIO $ st
+  liftIO (atomically (getVolatileStateSTM st))
 
--- | Sets Stage3 inside the compiler
-setStage3STM :: TVar IdeState -> Stage3 -> STM ()
-setStage3STM ref s3 = do
+-- | STM version of getVolatileState
+getVolatileStateSTM :: TVar IdeState -> STM IdeVolatileState
+getVolatileStateSTM st = ideVolatileState <$> readTVar st
+
+-- | Sets the VolatileState inside Ide's state
+setVolatileStateSTM :: TVar IdeState -> IdeVolatileState -> STM ()
+setVolatileStateSTM ref vs = do
   modifyTVar ref $ \x ->
-    x {ideStage3 = s3}
+    x {ideVolatileState = vs}
   pure ()
 
 -- | Checks if the given ModuleName matches the last rebuild cache and if it
@@ -126,7 +115,7 @@ setStage3STM ref s3 = do
 -- cache
 getAllModules :: Ide m => Maybe P.ModuleName -> m [(P.ModuleName, [IdeDeclarationAnn])]
 getAllModules mmoduleName = do
-  declarations <- s3Declarations <$> getStage3
+  declarations <- vsDeclarations <$> getVolatileState
   rebuild <- cachedRebuild
   case mmoduleName of
     Nothing -> pure (Map.toList declarations)
@@ -134,7 +123,7 @@ getAllModules mmoduleName = do
       case rebuild of
         Just (cachedModulename, ef)
           | cachedModulename == moduleName -> do
-              (AstData asts) <- s2AstData <$> getStage2
+              AstData asts <- vsAstData <$> getVolatileState
               let
                 ast =
                   fromMaybe (Map.empty, Map.empty) (Map.lookup moduleName asts)
@@ -148,9 +137,9 @@ getAllModules mmoduleName = do
               pure (Map.toList resolved)
         _ -> pure (Map.toList declarations)
 
--- | Adds an ExternsFile into psc-ide's State Stage1. This does not populate the
--- following Stages, which needs to be done after all the necessary Exterms have
--- been loaded.
+-- | Adds an ExternsFile into psc-ide's FileState. This does not populate the
+-- VolatileState, which needs to be done after all the necessary Externs and
+-- SourceFiles have been loaded.
 insertExterns :: Ide m => ExternsFile -> m ()
 insertExterns ef = do
   st <- ideStateVar <$> ask
@@ -160,61 +149,61 @@ insertExterns ef = do
 insertExternsSTM :: TVar IdeState -> ExternsFile -> STM ()
 insertExternsSTM ref ef =
   modifyTVar ref $ \x ->
-    x { ideStage1 = (ideStage1 x) {
-          s1Externs = Map.insert (efModuleName ef) ef (s1Externs (ideStage1 x))}}
+    x { ideFileState = (ideFileState x) {
+          fsExterns = Map.insert (efModuleName ef) ef (fsExterns (ideFileState x))}}
 
 -- | Sets rebuild cache to the given ExternsFile
 cacheRebuild :: Ide m => ExternsFile -> m ()
 cacheRebuild ef = do
   st <- ideStateVar <$> ask
   liftIO . atomically . modifyTVar st $ \x ->
-    x { ideStage3 = (ideStage3 x) {
-          s3CachedRebuild = Just (efModuleName ef, ef)}}
+    x { ideVolatileState = (ideVolatileState x) {
+          vsCachedRebuild = Just (efModuleName ef, ef)}}
 
 -- | Retrieves the rebuild cache
 cachedRebuild :: Ide m => m (Maybe (P.ModuleName, ExternsFile))
-cachedRebuild = s3CachedRebuild <$> getStage3
+cachedRebuild = vsCachedRebuild <$> getVolatileState
 
--- | Extracts source spans from the parsed ASTs
-populateStage2 :: (Ide m, MonadLogger m) => m ()
-populateStage2 = do
+-- | Resolves reexports and populates VolatileState with data to be used in queries.
+populateVolatileStateSync :: (Ide m, MonadLogger m) => m ()
+populateVolatileStateSync = do
   st <- ideStateVar <$> ask
-  let message duration = "Finished populating Stage2 in " <> displayTimeSpec duration
-  logPerf message (liftIO (atomically (populateStage2STM st)))
-
--- | STM version of populateStage2
-populateStage2STM :: TVar IdeState -> STM ()
-populateStage2STM ref = do
-  modules <- s1Modules <$> getStage1STM ref
-  let astData = map (extractAstInformation . fst) modules
-  setStage2STM ref (Stage2 (AstData astData))
-
--- | Resolves reexports and populates Stage3 with data to be used in queries.
-populateStage3 :: (Ide m, MonadLogger m) => m ()
-populateStage3 = do
-  st <- ideStateVar <$> ask
-  let message duration = "Finished populating Stage3 in " <> displayTimeSpec duration
-  results <- logPerf message (liftIO (atomically (populateStage3STM st)))
+  let message duration = "Finished populating volatile state in: " <> displayTimeSpec duration
+  results <- logPerf message $ do
+    !r <- liftIO (atomically (populateVolatileStateSTM st))
+    pure r
   void $ Map.traverseWithKey
     (\mn -> logWarnN . prettyPrintReexportResult (const (P.runModuleName mn)))
     (Map.filter reexportHasFailures results)
 
--- | STM version of populateStage3
-populateStage3STM
+populateVolatileState :: (Ide m, MonadLogger m) => m (Async ())
+populateVolatileState = do
+  env <- ask
+  let ll = confLogLevel (ideConfiguration env)
+  -- populateVolatileState return Unit for now, so it's fine to discard this
+  -- result. We might want to block on this in a benchmarking situation.
+  liftIO (async (runLogger ll (runReaderT populateVolatileStateSync env)))
+
+-- | STM version of populateVolatileState
+populateVolatileStateSTM
   :: TVar IdeState
   -> STM (ModuleMap (ReexportResult [IdeDeclarationAnn]))
-populateStage3STM ref = do
-  externs <- s1Externs <$> getStage1STM ref
-  (AstData asts) <- s2AstData <$> getStage2STM ref
-  let (modules, reexportRefs) = (map fst &&& map snd) (Map.map convertExterns externs)
+populateVolatileStateSTM ref = do
+  IdeFileState{fsExterns = externs, fsModules = modules} <- getFileStateSTM ref
+  -- We're not using the cached rebuild for anything other than preserving it
+  -- through the repopulation
+  rebuildCache <- vsCachedRebuild <$> getVolatileStateSTM ref
+  let asts = map (extractAstInformation . fst) modules
+  let (moduleDeclarations, reexportRefs) = (map fst &&& map snd) (Map.map convertExterns externs)
       results =
-        resolveLocations asts modules
+        moduleDeclarations
+        & map resolveDataConstructorsForModule
+        & resolveLocations asts
         & resolveInstances externs
         & resolveOperators
         & resolveReexports reexportRefs
-  setStage3STM ref (Stage3 (map reResolved results) Nothing)
-  pure results
-
+  setVolatileStateSTM ref (IdeVolatileState (AstData asts) (map reResolved results) rebuildCache)
+  pure (force results)
 
 resolveLocations
   :: ModuleMap (DefinitionSites P.SourceSpan, TypeAnnotations)
@@ -250,12 +239,12 @@ resolveLocationsForModule (defs, types) decls =
       IdeDeclKind i ->
         annotateKind (i ^. properNameT) (IdeDeclKind i)
       where
-        annotateFunction x = IdeDeclarationAnn (ann { _annLocation = Map.lookup (IdeNSValue (P.runIdent x)) defs
+        annotateFunction x = IdeDeclarationAnn (ann { _annLocation = Map.lookup (IdeNamespaced IdeNSValue (P.runIdent x)) defs
                                                     , _annTypeAnnotation = Map.lookup x types
                                                     })
-        annotateValue x = IdeDeclarationAnn (ann {_annLocation = Map.lookup (IdeNSValue x) defs})
-        annotateType x = IdeDeclarationAnn (ann {_annLocation = Map.lookup (IdeNSType x) defs})
-        annotateKind x = IdeDeclarationAnn (ann {_annLocation = Map.lookup (IdeNSKind x) defs})
+        annotateValue x = IdeDeclarationAnn (ann {_annLocation = Map.lookup (IdeNamespaced IdeNSValue x) defs})
+        annotateType x = IdeDeclarationAnn (ann {_annLocation = Map.lookup (IdeNamespaced IdeNSType x) defs})
+        annotateKind x = IdeDeclarationAnn (ann {_annLocation = Map.lookup (IdeNamespaced IdeNSKind x) defs})
 
 resolveInstances
   :: ModuleMap P.ExternsFile
@@ -276,8 +265,8 @@ resolveInstances externs declarations =
           _ -> Nothing
     extractInstances _ _ = Nothing
 
-    go ::
-      (IdeInstance, P.ModuleName, P.ProperName 'P.ClassName)
+    go
+      :: (IdeInstance, P.ModuleName, P.ProperName 'P.ClassName)
       -> ModuleMap [IdeDeclarationAnn]
       -> ModuleMap [IdeDeclarationAnn]
     go (ideInstance, classModule, className) acc' =
@@ -340,3 +329,22 @@ resolveOperatorsForModule modules = map (idaDeclaration %~ resolveOperator)
 
 mapIf :: Functor f => (b -> Bool) -> (b -> b) -> f b -> f b
 mapIf p f = map (\x -> if p x then f x else x)
+
+resolveDataConstructorsForModule
+  :: [IdeDeclarationAnn]
+  -> [IdeDeclarationAnn]
+resolveDataConstructorsForModule decls =
+  map (idaDeclaration %~ resolveDataConstructors) decls
+  where
+    resolveDataConstructors :: IdeDeclaration -> IdeDeclaration
+    resolveDataConstructors decl = case decl of
+      IdeDeclType ty ->
+        IdeDeclType (ty & ideTypeDtors .~ fromMaybe [] (Map.lookup (ty^.ideTypeName) dtors))
+      _ ->
+        decl
+
+    dtors =
+      decls
+      & mapMaybe (preview (idaDeclaration._IdeDeclDataConstructor))
+      & foldr (\(IdeDataConstructor name typeName type') ->
+                  Map.insertWith (<>) typeName [(name, type')]) Map.empty

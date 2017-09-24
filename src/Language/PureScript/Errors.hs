@@ -19,6 +19,7 @@ import           Data.Either (partitionEithers)
 import           Data.Foldable (fold)
 import           Data.Functor.Identity (Identity(..))
 import           Data.List (transpose, nubBy, sort, partition, dropWhileEnd)
+import qualified Data.List.NonEmpty as NEL
 import           Data.Maybe (maybeToList, fromMaybe, mapMaybe)
 import qualified Data.Map as M
 import qualified Data.Text as T
@@ -121,6 +122,8 @@ errorCode em = case unwrapErrorMessage em of
   PossiblyInfiniteInstance{} -> "PossiblyInfiniteInstance"
   CannotDerive{} -> "CannotDerive"
   InvalidNewtypeInstance{} -> "InvalidNewtypeInstance"
+  MissingNewtypeSuperclassInstance{} -> "MissingNewtypeSuperclassInstance"
+  UnverifiableSuperclassInstance{} -> "UnverifiableSuperclassInstance"
   InvalidDerivedInstance{} -> "InvalidDerivedInstance"
   ExpectedTypeConstructor{} -> "ExpectedTypeConstructor"
   CannotFindDerivingType{} -> "CannotFindDerivingType"
@@ -186,6 +189,10 @@ nonEmpty = not . null . runMultipleErrors
 -- | Create an error set from a single simple error message
 errorMessage :: SimpleErrorMessage -> MultipleErrors
 errorMessage err = MultipleErrors [ErrorMessage [] err]
+
+-- | Create an error set from a single simple error message and source annotation
+errorMessage' :: SourceSpan -> SimpleErrorMessage -> MultipleErrors
+errorMessage' ss err = MultipleErrors [ErrorMessage [PositionedError ss] err]
 
 -- | Create an error set from a single error message
 singleError :: ErrorMessage -> MultipleErrors
@@ -262,6 +269,8 @@ onTypesInErrorMessageM f (ErrorMessage hints simple) = ErrorMessage <$> traverse
   gSimple (PossiblyInfiniteInstance cl ts) = PossiblyInfiniteInstance cl <$> traverse f ts
   gSimple (CannotDerive cl ts) = CannotDerive cl <$> traverse f ts
   gSimple (InvalidNewtypeInstance cl ts) = InvalidNewtypeInstance cl <$> traverse f ts
+  gSimple (MissingNewtypeSuperclassInstance cl1 cl2 ts) = MissingNewtypeSuperclassInstance cl1 cl2 <$> traverse f ts
+  gSimple (UnverifiableSuperclassInstance cl1 cl2 ts) = UnverifiableSuperclassInstance cl1 cl2 <$> traverse f ts
   gSimple (InvalidDerivedInstance cl ts n) = InvalidDerivedInstance cl <$> traverse f ts <*> pure n
   gSimple (ExpectedTypeConstructor cl ts ty) = ExpectedTypeConstructor cl <$> traverse f ts <*> f ty
   gSimple (ExpectedType ty k) = ExpectedType <$> f ty <*> pure k
@@ -422,7 +431,7 @@ prettyPrintSingleError (PPEOptions codeColor full level showDocs relPath) e = fl
     renderSimpleErrorMessage :: SimpleErrorMessage -> Box.Box
     renderSimpleErrorMessage (ModuleNotFound mn) =
       paras [ line $ "Module " <> markCode (runModuleName mn) <> " was not found."
-            , line "Make sure the source file exists, and that it has been provided as an input to psc."
+            , line "Make sure the source file exists, and that it has been provided as an input to the compiler."
             ]
     renderSimpleErrorMessage (CannotGetFileInfo path) =
       paras [ line "Unable to read file info: "
@@ -672,6 +681,22 @@ prettyPrintSingleError (PPEOptions codeColor full level showDocs relPath) e = fl
                 , Box.vcat Box.left (map typeAtomAsBox ts)
                 ]
             , line "Make sure this is a newtype."
+            ]
+    renderSimpleErrorMessage (MissingNewtypeSuperclassInstance su cl ts) =
+      paras [ line "The derived newtype instance for"
+            , markCodeBox $ indent $ Box.hsep 1 Box.left
+                [ line (showQualified runProperName cl)
+                , Box.vcat Box.left (map typeAtomAsBox ts)
+                ]
+            , line $ "does not include a derived superclass instance for " <> markCode (showQualified runProperName su) <> "."
+            ]
+    renderSimpleErrorMessage (UnverifiableSuperclassInstance su cl ts) =
+      paras [ line "The derived newtype instance for"
+            , markCodeBox $ indent $ Box.hsep 1 Box.left
+                [ line (showQualified runProperName cl)
+                , Box.vcat Box.left (map typeAtomAsBox ts)
+                ]
+            , line $ "implies an superclass instance for " <> markCode (showQualified runProperName su) <> " which could not be verified."
             ]
     renderSimpleErrorMessage (InvalidDerivedInstance nm ts argCount) =
       paras [ line "Cannot derive the type class instance"
@@ -1020,7 +1045,7 @@ prettyPrintSingleError (PPEOptions codeColor full level showDocs relPath) e = fl
             ]
     renderHint (ErrorInBindingGroup nms) detail =
       paras [ detail
-            , line $ "in binding group " <> T.intercalate ", " (map showIdent nms)
+            , line $ "in binding group " <> T.intercalate ", " (NEL.toList (fmap showIdent nms))
             ]
     renderHint (ErrorInDataBindingGroup nms) detail =
       paras [ detail
@@ -1170,7 +1195,7 @@ prettyPrintSingleError (PPEOptions codeColor full level showDocs relPath) e = fl
 
 -- Pretty print and export declaration
 prettyPrintExport :: DeclarationRef -> Text
-prettyPrintExport (TypeRef pn _) = runProperName pn
+prettyPrintExport (TypeRef _ pn _) = runProperName pn
 prettyPrintExport ref =
   fromMaybe
     (internalError "prettyPrintRef returned Nothing in prettyPrintExport")
@@ -1185,30 +1210,28 @@ prettyPrintImport mn idt qual =
   in i <> maybe "" (\q -> " as " <> runModuleName q) qual
 
 prettyPrintRef :: DeclarationRef -> Maybe Text
-prettyPrintRef (TypeRef pn Nothing) =
+prettyPrintRef (TypeRef _ pn Nothing) =
   Just $ runProperName pn <> "(..)"
-prettyPrintRef (TypeRef pn (Just [])) =
+prettyPrintRef (TypeRef _ pn (Just [])) =
   Just $ runProperName pn
-prettyPrintRef (TypeRef pn (Just dctors)) =
+prettyPrintRef (TypeRef _ pn (Just dctors)) =
   Just $ runProperName pn <> "(" <> T.intercalate ", " (map runProperName dctors) <> ")"
-prettyPrintRef (TypeOpRef op) =
+prettyPrintRef (TypeOpRef _ op) =
   Just $ "type " <> showOp op
-prettyPrintRef (ValueRef ident) =
+prettyPrintRef (ValueRef _ ident) =
   Just $ showIdent ident
-prettyPrintRef (ValueOpRef op) =
+prettyPrintRef (ValueOpRef _ op) =
   Just $ showOp op
-prettyPrintRef (TypeClassRef pn) =
+prettyPrintRef (TypeClassRef _ pn) =
   Just $ "class " <> runProperName pn
-prettyPrintRef (TypeInstanceRef ident) =
+prettyPrintRef (TypeInstanceRef _ ident) =
   Just $ showIdent ident
-prettyPrintRef (ModuleRef name) =
+prettyPrintRef (ModuleRef _ name) =
   Just $ "module " <> runModuleName name
-prettyPrintRef (KindRef pn) =
+prettyPrintRef (KindRef _ pn) =
   Just $ "kind " <> runProperName pn
-prettyPrintRef (ReExportRef _ _) =
+prettyPrintRef ReExportRef{} =
   Nothing
-prettyPrintRef (PositionedDeclarationRef _ _ ref) =
-  prettyPrintRef ref
 
 -- | Pretty print multiple errors
 prettyPrintMultipleErrors :: PPEOptions -> MultipleErrors -> String

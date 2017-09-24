@@ -1,6 +1,8 @@
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE DeriveAnyClass #-}
 
 -- |
 -- Data types for modules and declarations
@@ -9,11 +11,14 @@ module Language.PureScript.AST.Declarations where
 
 import Prelude.Compat
 
+import Control.DeepSeq (NFData)
 import Control.Monad.Identity
 
 import Data.Aeson.TH
 import qualified Data.Map as M
 import Data.Text (Text)
+import qualified Data.List.NonEmpty as NEL
+import GHC.Generics (Generic)
 
 import Language.PureScript.AST.Binders
 import Language.PureScript.AST.Literals
@@ -28,6 +33,7 @@ import Language.PureScript.TypeClassDictionaries
 import Language.PureScript.Comments
 import Language.PureScript.Environment
 import qualified Language.PureScript.Bundle as Bundle
+import qualified Language.PureScript.Constants as C
 
 import qualified Text.Parsec as P
 
@@ -109,6 +115,8 @@ data SimpleErrorMessage
   | InvalidDerivedInstance (Qualified (ProperName 'ClassName)) [Type] Int
   | ExpectedTypeConstructor (Qualified (ProperName 'ClassName)) [Type] Type
   | InvalidNewtypeInstance (Qualified (ProperName 'ClassName)) [Type]
+  | MissingNewtypeSuperclassInstance (Qualified (ProperName 'ClassName)) (Qualified (ProperName 'ClassName)) [Type]
+  | UnverifiableSuperclassInstance (Qualified (ProperName 'ClassName)) (Qualified (ProperName 'ClassName)) [Type]
   | CannotFindDerivingType (ProperName 'TypeName)
   | DuplicateLabel Label (Maybe Expr)
   | DuplicateValueDeclaration Ident
@@ -180,7 +188,7 @@ data ErrorMessageHint
   | ErrorInApplication Expr Type Expr
   | ErrorInDataConstructor (ProperName 'ConstructorName)
   | ErrorInTypeConstructor (ProperName 'TypeName)
-  | ErrorInBindingGroup [Ident]
+  | ErrorInBindingGroup (NEL.NonEmpty Ident)
   | ErrorInDataBindingGroup [ProperName 'TypeName]
   | ErrorInTypeSynonym (ProperName 'TypeName)
   | ErrorInValueDeclaration Ident
@@ -225,14 +233,30 @@ getModuleSourceSpan (Module ss _ _ _ _) = ss
 -- |
 -- Add an import declaration for a module if it does not already explicitly import it.
 --
-addDefaultImport :: ModuleName -> Module -> Module
-addDefaultImport toImport m@(Module ss coms mn decls exps)  =
+-- Will not import an unqualified module if that module has already been imported qualified.
+-- (See #2197)
+--
+addDefaultImport :: Qualified ModuleName -> Module -> Module
+addDefaultImport (Qualified toImportAs toImport) m@(Module ss coms mn decls exps) =
   if isExistingImport `any` decls || mn == toImport then m
-  else Module ss coms mn (ImportDeclaration toImport Implicit Nothing : decls) exps
+  else Module ss coms mn (ImportDeclaration (ss, []) toImport Implicit toImportAs : decls) exps
   where
-  isExistingImport (ImportDeclaration mn' _ _) | mn' == toImport = True
-  isExistingImport (PositionedDeclaration _ _ d) = isExistingImport d
+  isExistingImport (ImportDeclaration _ mn' _ as')
+    | mn' == toImport =
+        case toImportAs of
+          Nothing -> True
+          _ -> as' == toImportAs
   isExistingImport _ = False
+
+-- | Adds import declarations to a module for an implicit Prim import and Prim
+-- | qualified as Prim, as necessary.
+importPrim :: Module -> Module
+importPrim =
+  let
+    primModName = ModuleName [ProperName C.prim]
+  in
+    addDefaultImport (Qualified (Just primModName) primModName)
+      . addDefaultImport (Qualified Nothing primModName)
 
 -- |
 -- An item in a list of explicit imports or exports
@@ -241,120 +265,127 @@ data DeclarationRef
   -- |
   -- A type constructor with data constructors
   --
-  = TypeRef (ProperName 'TypeName) (Maybe [ProperName 'ConstructorName])
+  = TypeRef SourceSpan (ProperName 'TypeName) (Maybe [ProperName 'ConstructorName])
   -- |
   -- A type operator
   --
-  | TypeOpRef (OpName 'TypeOpName)
+  | TypeOpRef SourceSpan (OpName 'TypeOpName)
   -- |
   -- A value
   --
-  | ValueRef Ident
+  | ValueRef SourceSpan Ident
   -- |
   -- A value-level operator
   --
-  | ValueOpRef (OpName 'ValueOpName)
+  | ValueOpRef SourceSpan (OpName 'ValueOpName)
   -- |
   -- A type class
   --
-  | TypeClassRef (ProperName 'ClassName)
+  | TypeClassRef SourceSpan (ProperName 'ClassName)
   -- |
   -- A type class instance, created during typeclass desugaring (name, class name, instance types)
   --
-  | TypeInstanceRef Ident
+  | TypeInstanceRef SourceSpan Ident
   -- |
   -- A module, in its entirety
   --
-  | ModuleRef ModuleName
+  | ModuleRef SourceSpan ModuleName
   -- |
   -- A named kind
   --
-  | KindRef (ProperName 'KindName)
+  | KindRef SourceSpan (ProperName 'KindName)
   -- |
   -- A value re-exported from another module. These will be inserted during
   -- elaboration in name desugaring.
   --
-  | ReExportRef ModuleName DeclarationRef
-  -- |
-  -- A declaration reference with source position information
-  --
-  | PositionedDeclarationRef SourceSpan [Comment] DeclarationRef
-  deriving (Show)
+  | ReExportRef SourceSpan ModuleName DeclarationRef
+  deriving (Show, Generic, NFData)
 
 instance Eq DeclarationRef where
-  (TypeRef name dctors) == (TypeRef name' dctors') = name == name' && dctors == dctors'
-  (TypeOpRef name) == (TypeOpRef name') = name == name'
-  (ValueRef name) == (ValueRef name') = name == name'
-  (ValueOpRef name) == (ValueOpRef name') = name == name'
-  (TypeClassRef name) == (TypeClassRef name') = name == name'
-  (TypeInstanceRef name) == (TypeInstanceRef name') = name == name'
-  (ModuleRef name) == (ModuleRef name') = name == name'
-  (KindRef name) == (KindRef name') = name == name'
-  (ReExportRef mn ref) == (ReExportRef mn' ref') = mn == mn' && ref == ref'
-  (PositionedDeclarationRef _ _ r) == r' = r == r'
-  r == (PositionedDeclarationRef _ _ r') = r == r'
+  (TypeRef _ name dctors) == (TypeRef _ name' dctors') = name == name' && dctors == dctors'
+  (TypeOpRef _ name) == (TypeOpRef _ name') = name == name'
+  (ValueRef _ name) == (ValueRef _ name') = name == name'
+  (ValueOpRef _ name) == (ValueOpRef _ name') = name == name'
+  (TypeClassRef _ name) == (TypeClassRef _ name') = name == name'
+  (TypeInstanceRef _ name) == (TypeInstanceRef _ name') = name == name'
+  (ModuleRef _ name) == (ModuleRef _ name') = name == name'
+  (KindRef _ name) == (KindRef _ name') = name == name'
+  (ReExportRef _ mn ref) == (ReExportRef _ mn' ref') = mn == mn' && ref == ref'
   _ == _ = False
 
 -- enable sorting lists of explicitly imported refs when suggesting imports in linting, IDE, etc.
 -- not an Ord because this implementation is not consistent with its Eq instance.
 -- think of it as a notion of contextual, not inherent, ordering.
 compDecRef :: DeclarationRef -> DeclarationRef -> Ordering
-compDecRef (TypeRef name _) (TypeRef name' _) = compare name name'
-compDecRef (TypeOpRef name) (TypeOpRef name') = compare name name'
-compDecRef (ValueRef ident) (ValueRef ident') = compare ident ident'
-compDecRef (ValueOpRef name) (ValueOpRef name') = compare name name'
-compDecRef (TypeClassRef name) (TypeClassRef name') = compare name name'
-compDecRef (TypeInstanceRef ident) (TypeInstanceRef ident') = compare ident ident'
-compDecRef (ModuleRef name) (ModuleRef name') = compare name name'
-compDecRef (KindRef name) (KindRef name') = compare name name'
-compDecRef (ReExportRef name _) (ReExportRef name' _) = compare name name'
-compDecRef (PositionedDeclarationRef _ _ ref) ref' = compDecRef ref ref'
-compDecRef ref (PositionedDeclarationRef _ _ ref') = compDecRef ref ref'
+compDecRef (TypeRef _ name _) (TypeRef _ name' _) = compare name name'
+compDecRef (TypeOpRef _ name) (TypeOpRef _ name') = compare name name'
+compDecRef (ValueRef _ ident) (ValueRef _ ident') = compare ident ident'
+compDecRef (ValueOpRef _ name) (ValueOpRef _ name') = compare name name'
+compDecRef (TypeClassRef _ name) (TypeClassRef _ name') = compare name name'
+compDecRef (TypeInstanceRef _ ident) (TypeInstanceRef _ ident') = compare ident ident'
+compDecRef (ModuleRef _ name) (ModuleRef _ name') = compare name name'
+compDecRef (KindRef _ name) (KindRef _ name') = compare name name'
+compDecRef (ReExportRef _ name _) (ReExportRef _ name' _) = compare name name'
 compDecRef ref ref' = compare
   (orderOf ref) (orderOf ref')
     where
       orderOf :: DeclarationRef -> Int
-      orderOf (TypeClassRef _) = 0
-      orderOf (TypeOpRef _) = 1
-      orderOf (TypeRef _ _) = 2
-      orderOf (ValueRef _) = 3
-      orderOf (ValueOpRef _) = 4
-      orderOf (KindRef _) = 5
+      orderOf TypeClassRef{} = 0
+      orderOf TypeOpRef{} = 1
+      orderOf TypeRef{} = 2
+      orderOf ValueRef{} = 3
+      orderOf ValueOpRef{} = 4
+      orderOf KindRef{} = 5
       orderOf _ = 6
 
+declRefSourceSpan :: DeclarationRef -> SourceSpan
+declRefSourceSpan (TypeRef ss _ _) = ss
+declRefSourceSpan (TypeOpRef ss _) = ss
+declRefSourceSpan (ValueRef ss _) = ss
+declRefSourceSpan (ValueOpRef ss _) = ss
+declRefSourceSpan (TypeClassRef ss _) = ss
+declRefSourceSpan (TypeInstanceRef ss _) = ss
+declRefSourceSpan (ModuleRef ss _) = ss
+declRefSourceSpan (KindRef ss _) = ss
+declRefSourceSpan (ReExportRef ss _ _) = ss
+
+declRefName :: DeclarationRef -> Name
+declRefName (TypeRef _ n _) = TyName n
+declRefName (TypeOpRef _ n) = TyOpName n
+declRefName (ValueRef _ n) = IdentName n
+declRefName (ValueOpRef _ n) = ValOpName n
+declRefName (TypeClassRef _ n) = TyClassName n
+declRefName (TypeInstanceRef _ n) = IdentName n
+declRefName (ModuleRef _ n) = ModName n
+declRefName (KindRef _ n) = KiName n
+declRefName (ReExportRef _ _ ref) = declRefName ref
+
 getTypeRef :: DeclarationRef -> Maybe (ProperName 'TypeName, Maybe [ProperName 'ConstructorName])
-getTypeRef (TypeRef name dctors) = Just (name, dctors)
-getTypeRef (PositionedDeclarationRef _ _ r) = getTypeRef r
+getTypeRef (TypeRef _ name dctors) = Just (name, dctors)
 getTypeRef _ = Nothing
 
 getTypeOpRef :: DeclarationRef -> Maybe (OpName 'TypeOpName)
-getTypeOpRef (TypeOpRef op) = Just op
-getTypeOpRef (PositionedDeclarationRef _ _ r) = getTypeOpRef r
+getTypeOpRef (TypeOpRef _ op) = Just op
 getTypeOpRef _ = Nothing
 
 getValueRef :: DeclarationRef -> Maybe Ident
-getValueRef (ValueRef name) = Just name
-getValueRef (PositionedDeclarationRef _ _ r) = getValueRef r
+getValueRef (ValueRef _ name) = Just name
 getValueRef _ = Nothing
 
 getValueOpRef :: DeclarationRef -> Maybe (OpName 'ValueOpName)
-getValueOpRef (ValueOpRef op) = Just op
-getValueOpRef (PositionedDeclarationRef _ _ r) = getValueOpRef r
+getValueOpRef (ValueOpRef _ op) = Just op
 getValueOpRef _ = Nothing
 
 getTypeClassRef :: DeclarationRef -> Maybe (ProperName 'ClassName)
-getTypeClassRef (TypeClassRef name) = Just name
-getTypeClassRef (PositionedDeclarationRef _ _ r) = getTypeClassRef r
+getTypeClassRef (TypeClassRef _ name) = Just name
 getTypeClassRef _ = Nothing
 
 getKindRef :: DeclarationRef -> Maybe (ProperName 'KindName)
-getKindRef (KindRef name) = Just name
-getKindRef (PositionedDeclarationRef _ _ r) = getKindRef r
+getKindRef (KindRef _ name) = Just name
 getKindRef _ = Nothing
 
 isModuleRef :: DeclarationRef -> Bool
-isModuleRef (PositionedDeclarationRef _ _ r) = isModuleRef r
-isModuleRef (ModuleRef _) = True
+isModuleRef ModuleRef{} = True
 isModuleRef _ = False
 
 -- |
@@ -383,6 +414,53 @@ isExplicit :: ImportDeclarationType -> Bool
 isExplicit (Explicit _) = True
 isExplicit _ = False
 
+-- | A type declaration assigns a type to an identifier, eg:
+--
+-- @identity :: forall a. a -> a@
+--
+-- In this example @identity@ is the identifier and @forall a. a -> a@ the type.
+data TypeDeclarationData = TypeDeclarationData
+  { tydeclSourceAnn :: !SourceAnn
+  , tydeclIdent :: !Ident
+  , tydeclType :: !Type
+  } deriving (Show, Eq)
+
+overTypeDeclaration :: (TypeDeclarationData -> TypeDeclarationData) -> Declaration -> Declaration
+overTypeDeclaration f d = maybe d (TypeDeclaration . f) (getTypeDeclaration d)
+
+getTypeDeclaration :: Declaration -> Maybe TypeDeclarationData
+getTypeDeclaration (TypeDeclaration d) = Just d
+getTypeDeclaration _ = Nothing
+
+unwrapTypeDeclaration :: TypeDeclarationData -> (Ident, Type)
+unwrapTypeDeclaration td = (tydeclIdent td, tydeclType td)
+
+-- | A value declaration assigns a name and potential binders, to an expression (or multiple guarded expressions).
+--
+-- @double x = x + x@
+--
+-- In this example @double@ is the identifier, @x@ is a binder and @x + x@ is the expression.
+data ValueDeclarationData a = ValueDeclarationData
+  { valdeclSourceAnn :: !SourceAnn
+  , valdeclIdent :: !Ident
+  -- ^ The declared value's name
+  , valdeclName :: !NameKind
+  -- ^ Whether or not this value is exported/visible
+  , valdeclBinders :: ![Binder]
+  , valdeclExpression :: !a
+  } deriving (Show, Functor, Foldable, Traversable)
+
+overValueDeclaration :: (ValueDeclarationData [GuardedExpr] -> ValueDeclarationData [GuardedExpr]) -> Declaration -> Declaration
+overValueDeclaration f d = maybe d (ValueDeclaration . f) (getValueDeclaration d)
+
+getValueDeclaration :: Declaration -> Maybe (ValueDeclarationData [GuardedExpr])
+getValueDeclaration (ValueDeclaration d) = Just d
+getValueDeclaration _ = Nothing
+
+pattern ValueDecl :: SourceAnn -> Ident -> NameKind -> [Binder] -> [GuardedExpr] -> Declaration
+pattern ValueDecl sann ident name binders expr
+  = ValueDeclaration (ValueDeclarationData sann ident name binders expr)
+
 -- |
 -- The data type of declarations
 --
@@ -390,63 +468,59 @@ data Declaration
   -- |
   -- A data type declaration (data or newtype, name, arguments, data constructors)
   --
-  = DataDeclaration DataDeclType (ProperName 'TypeName) [(Text, Maybe Kind)] [(ProperName 'ConstructorName, [Type])]
+  = DataDeclaration SourceAnn DataDeclType (ProperName 'TypeName) [(Text, Maybe Kind)] [(ProperName 'ConstructorName, [Type])]
   -- |
   -- A minimal mutually recursive set of data type declarations
   --
-  | DataBindingGroupDeclaration [Declaration]
+  | DataBindingGroupDeclaration (NEL.NonEmpty Declaration)
   -- |
   -- A type synonym declaration (name, arguments, type)
   --
-  | TypeSynonymDeclaration (ProperName 'TypeName) [(Text, Maybe Kind)] Type
+  | TypeSynonymDeclaration SourceAnn (ProperName 'TypeName) [(Text, Maybe Kind)] Type
   -- |
   -- A type declaration for a value (name, ty)
   --
-  | TypeDeclaration Ident Type
+  | TypeDeclaration {-# UNPACK #-} !TypeDeclarationData
   -- |
   -- A value declaration (name, top-level binders, optional guard, value)
   --
-  | ValueDeclaration Ident NameKind [Binder] [GuardedExpr]
+  | ValueDeclaration {-# UNPACK #-} !(ValueDeclarationData [GuardedExpr])
   -- |
   -- A declaration paired with pattern matching in let-in expression (binder, optional guard, value)
-  | BoundValueDeclaration Binder Expr
+  | BoundValueDeclaration SourceAnn Binder Expr
   -- |
   -- A minimal mutually recursive set of value declarations
   --
-  | BindingGroupDeclaration [(Ident, NameKind, Expr)]
+  | BindingGroupDeclaration (NEL.NonEmpty ((SourceAnn, Ident), NameKind, Expr))
   -- |
   -- A foreign import declaration (name, type)
   --
-  | ExternDeclaration Ident Type
+  | ExternDeclaration SourceAnn Ident Type
   -- |
   -- A data type foreign import (name, kind)
   --
-  | ExternDataDeclaration (ProperName 'TypeName) Kind
+  | ExternDataDeclaration SourceAnn (ProperName 'TypeName) Kind
   -- |
   -- A foreign kind import (name)
   --
-  | ExternKindDeclaration (ProperName 'KindName)
+  | ExternKindDeclaration SourceAnn (ProperName 'KindName)
   -- |
   -- A fixity declaration
   --
-  | FixityDeclaration (Either ValueFixity TypeFixity)
+  | FixityDeclaration SourceAnn (Either ValueFixity TypeFixity)
   -- |
   -- A module import (module name, qualified/unqualified/hiding, optional "qualified as" name)
   --
-  | ImportDeclaration ModuleName ImportDeclarationType (Maybe ModuleName)
+  | ImportDeclaration SourceAnn ModuleName ImportDeclarationType (Maybe ModuleName)
   -- |
   -- A type class declaration (name, argument, implies, member declarations)
   --
-  | TypeClassDeclaration (ProperName 'ClassName) [(Text, Maybe Kind)] [Constraint] [FunctionalDependency] [Declaration]
+  | TypeClassDeclaration SourceAnn (ProperName 'ClassName) [(Text, Maybe Kind)] [Constraint] [FunctionalDependency] [Declaration]
   -- |
-  -- A type instance declaration (name, dependencies, class name, instance types, member
-  -- declarations)
+  -- A type instance declaration (instance chain, chain index, name,
+  -- dependencies, class name, instance types, member declarations)
   --
-  | TypeInstanceDeclaration Ident [Constraint] (Qualified (ProperName 'ClassName)) [Type] TypeInstanceBody
-  -- |
-  -- A declaration with source position information
-  --
-  | PositionedDeclaration SourceSpan [Comment] Declaration
+  | TypeInstanceDeclaration SourceAnn [Ident] Integer Ident [Constraint] (Qualified (ProperName 'ClassName)) [Type] TypeInstanceBody
   deriving (Show)
 
 data ValueFixity = ValueFixity Fixity (Qualified (Either Ident (ProperName 'ConstructorName))) (OpName 'ValueOpName)
@@ -455,11 +529,11 @@ data ValueFixity = ValueFixity Fixity (Qualified (Either Ident (ProperName 'Cons
 data TypeFixity = TypeFixity Fixity (Qualified (ProperName 'TypeName)) (OpName 'TypeOpName)
   deriving (Eq, Ord, Show)
 
-pattern ValueFixityDeclaration :: Fixity -> Qualified (Either Ident (ProperName 'ConstructorName)) -> OpName 'ValueOpName -> Declaration
-pattern ValueFixityDeclaration fixity name op = FixityDeclaration (Left (ValueFixity fixity name op))
+pattern ValueFixityDeclaration :: SourceAnn -> Fixity -> Qualified (Either Ident (ProperName 'ConstructorName)) -> OpName 'ValueOpName -> Declaration
+pattern ValueFixityDeclaration sa fixity name op = FixityDeclaration sa (Left (ValueFixity fixity name op))
 
-pattern TypeFixityDeclaration :: Fixity -> Qualified (ProperName 'TypeName) -> OpName 'TypeOpName -> Declaration
-pattern TypeFixityDeclaration fixity name op = FixityDeclaration (Right (TypeFixity fixity name op))
+pattern TypeFixityDeclaration :: SourceAnn -> Fixity -> Qualified (ProperName 'TypeName) -> OpName 'TypeOpName -> Declaration
+pattern TypeFixityDeclaration sa fixity name op = FixityDeclaration sa (Right (TypeFixity fixity name op))
 
 -- | The members of a type class instance declaration
 data TypeInstanceBody
@@ -482,12 +556,47 @@ traverseTypeInstanceBody :: (Applicative f) => ([Declaration] -> f [Declaration]
 traverseTypeInstanceBody f (ExplicitInstance ds) = ExplicitInstance <$> f ds
 traverseTypeInstanceBody _ other = pure other
 
+declSourceAnn :: Declaration -> SourceAnn
+declSourceAnn (DataDeclaration sa _ _ _ _) = sa
+declSourceAnn (DataBindingGroupDeclaration ds) = declSourceAnn (NEL.head ds)
+declSourceAnn (TypeSynonymDeclaration sa _ _ _) = sa
+declSourceAnn (TypeDeclaration td) = tydeclSourceAnn td
+declSourceAnn (ValueDeclaration vd) = valdeclSourceAnn vd
+declSourceAnn (BoundValueDeclaration sa _ _) = sa
+declSourceAnn (BindingGroupDeclaration ds) = let ((sa, _), _, _) = NEL.head ds in sa
+declSourceAnn (ExternDeclaration sa _ _) = sa
+declSourceAnn (ExternDataDeclaration sa _ _) = sa
+declSourceAnn (ExternKindDeclaration sa _) = sa
+declSourceAnn (FixityDeclaration sa _) = sa
+declSourceAnn (ImportDeclaration sa _ _ _) = sa
+declSourceAnn (TypeClassDeclaration sa _ _ _ _ _) = sa
+declSourceAnn (TypeInstanceDeclaration sa _ _ _ _ _ _ _) = sa
+
+declSourceSpan :: Declaration -> SourceSpan
+declSourceSpan = fst . declSourceAnn
+
+declName :: Declaration -> Maybe Name
+declName (DataDeclaration _ _ n _ _) = Just (TyName n)
+declName (TypeSynonymDeclaration _ n _ _) = Just (TyName n)
+declName (ValueDeclaration vd) = Just (IdentName (valdeclIdent vd))
+declName (ExternDeclaration _ n _) = Just (IdentName n)
+declName (ExternDataDeclaration _ n _) = Just (TyName n)
+declName (ExternKindDeclaration _ n) = Just (KiName n)
+declName (FixityDeclaration _ (Left (ValueFixity _ _ n))) = Just (ValOpName n)
+declName (FixityDeclaration _ (Right (TypeFixity _ _ n))) = Just (TyOpName n)
+declName (TypeClassDeclaration _ n _ _ _ _) = Just (TyClassName n)
+declName (TypeInstanceDeclaration _ _ _ n _ _ _ _) = Just (IdentName n)
+declName ImportDeclaration{} = Nothing
+declName BindingGroupDeclaration{} = Nothing
+declName DataBindingGroupDeclaration{} = Nothing
+declName BoundValueDeclaration{} = Nothing
+declName TypeDeclaration{} = Nothing
+
 -- |
 -- Test if a declaration is a value declaration
 --
 isValueDecl :: Declaration -> Bool
 isValueDecl ValueDeclaration{} = True
-isValueDecl (PositionedDeclaration _ _ d) = isValueDecl d
 isValueDecl _ = False
 
 -- |
@@ -496,7 +605,6 @@ isValueDecl _ = False
 isDataDecl :: Declaration -> Bool
 isDataDecl DataDeclaration{} = True
 isDataDecl TypeSynonymDeclaration{} = True
-isDataDecl (PositionedDeclaration _ _ d) = isDataDecl d
 isDataDecl _ = False
 
 -- |
@@ -504,7 +612,6 @@ isDataDecl _ = False
 --
 isImportDecl :: Declaration -> Bool
 isImportDecl ImportDeclaration{} = True
-isImportDecl (PositionedDeclaration _ _ d) = isImportDecl d
 isImportDecl _ = False
 
 -- |
@@ -512,7 +619,6 @@ isImportDecl _ = False
 --
 isExternDataDecl :: Declaration -> Bool
 isExternDataDecl ExternDataDeclaration{} = True
-isExternDataDecl (PositionedDeclaration _ _ d) = isExternDataDecl d
 isExternDataDecl _ = False
 
 -- |
@@ -520,7 +626,6 @@ isExternDataDecl _ = False
 --
 isExternKindDecl :: Declaration -> Bool
 isExternKindDecl ExternKindDeclaration{} = True
-isExternKindDecl (PositionedDeclaration _ _ d) = isExternKindDecl d
 isExternKindDecl _ = False
 
 -- |
@@ -528,12 +633,10 @@ isExternKindDecl _ = False
 --
 isFixityDecl :: Declaration -> Bool
 isFixityDecl FixityDeclaration{} = True
-isFixityDecl (PositionedDeclaration _ _ d) = isFixityDecl d
 isFixityDecl _ = False
 
 getFixityDecl :: Declaration -> Maybe (Either ValueFixity TypeFixity)
-getFixityDecl (FixityDeclaration fixity) = Just fixity
-getFixityDecl (PositionedDeclaration _ _ d) = getFixityDecl d
+getFixityDecl (FixityDeclaration _ fixity) = Just fixity
 getFixityDecl _ = Nothing
 
 -- |
@@ -541,7 +644,6 @@ getFixityDecl _ = Nothing
 --
 isExternDecl :: Declaration -> Bool
 isExternDecl ExternDeclaration{} = True
-isExternDecl (PositionedDeclaration _ _ d) = isExternDecl d
 isExternDecl _ = False
 
 -- |
@@ -549,7 +651,6 @@ isExternDecl _ = False
 --
 isTypeClassInstanceDeclaration :: Declaration -> Bool
 isTypeClassInstanceDeclaration TypeInstanceDeclaration{} = True
-isTypeClassInstanceDeclaration (PositionedDeclaration _ _ d) = isTypeClassInstanceDeclaration d
 isTypeClassInstanceDeclaration _ = False
 
 -- |
@@ -557,7 +658,6 @@ isTypeClassInstanceDeclaration _ = False
 --
 isTypeClassDeclaration :: Declaration -> Bool
 isTypeClassDeclaration TypeClassDeclaration{} = True
-isTypeClassDeclaration (PositionedDeclaration _ _ d) = isTypeClassDeclaration d
 isTypeClassDeclaration _ = False
 
 -- |
@@ -666,6 +766,13 @@ data Expr
   -- A do-notation block
   --
   | Do [DoNotationElement]
+  -- |
+  -- A proxy value
+  --
+  | Proxy Type
+  -- An ado-notation block
+  --
+  | Ado [DoNotationElement] Expr
   -- |
   -- An application of a typeclass dictionary constructor. The value should be
   -- an ObjectLiteral.

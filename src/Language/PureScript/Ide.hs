@@ -12,8 +12,7 @@
 -- Interface for the psc-ide-server
 -----------------------------------------------------------------------------
 
-{-# LANGUAGE PackageImports        #-}
-{-# LANGUAGE TemplateHaskell       #-}
+{-# LANGUAGE PackageImports #-}
 
 module Language.PureScript.Ide
        ( handleCommand
@@ -23,6 +22,7 @@ import           Protolude
 
 import           "monad-logger" Control.Monad.Logger
 import qualified Language.PureScript                as P
+import qualified Language.PureScript.Constants      as C
 import qualified Language.PureScript.Ide.CaseSplit  as CS
 import           Language.PureScript.Ide.Command
 import           Language.PureScript.Ide.Completion
@@ -31,6 +31,7 @@ import           Language.PureScript.Ide.Externs
 import           Language.PureScript.Ide.Filter
 import           Language.PureScript.Ide.Imports    hiding (Import)
 import           Language.PureScript.Ide.Matcher
+import           Language.PureScript.Ide.Prim
 import           Language.PureScript.Ide.Pursuit
 import           Language.PureScript.Ide.Rebuild
 import           Language.PureScript.Ide.SourceFile
@@ -43,8 +44,10 @@ import           System.FilePath.Glob (glob)
 
 -- | Accepts a Commmand and runs it against psc-ide's State. This is the main
 -- entry point for the server.
-handleCommand :: (Ide m, MonadLogger m, MonadError IdeError m) =>
-                 Command -> m Success
+handleCommand
+  :: (Ide m, MonadLogger m, MonadError IdeError m)
+  => Command
+  -> m Success
 handleCommand c = case c of
   Load [] ->
     findAvailableExterns >>= loadModulesAsync
@@ -56,8 +59,8 @@ handleCommand c = case c of
     loadModulesSync modules
   Type search filters currentModule ->
     findType search filters currentModule
-  Complete filters matcher currentModule ->
-    findCompletions filters matcher currentModule
+  Complete filters matcher currentModule complOptions ->
+    findCompletions filters matcher currentModule complOptions
   Pursuit query Package ->
     findPursuitPackages query
   Pursuit query Identifier ->
@@ -75,16 +78,19 @@ handleCommand c = case c of
   Import fp outfp _ (AddImplicitImport mn) -> do
     rs <- addImplicitImport fp mn
     answerRequest outfp rs
-  Import fp outfp filters (AddImportForIdentifier ident) -> do
-    rs <- addImportForIdentifier fp ident filters
+  Import fp outfp _ (AddQualifiedImport mn qual) -> do
+    rs <- addQualifiedImport fp mn qual
+    answerRequest outfp rs
+  Import fp outfp filters (AddImportForIdentifier ident qual) -> do
+    rs <- addImportForIdentifier fp ident qual filters
     case rs of
       Right rs' -> answerRequest outfp rs'
       Left question ->
-        pure (CompletionResult (map (completionFromMatch . map withEmptyAnn) question))
-  Rebuild file ->
-    rebuildFileAsync file
-  RebuildSync file ->
-    rebuildFileSync file
+        pure (CompletionResult (map (completionFromMatch . simpleExport . map withEmptyAnn) question))
+  Rebuild file actualFile ->
+    rebuildFileAsync file actualFile
+  RebuildSync file actualFile ->
+    rebuildFileSync file actualFile
   Cwd ->
     TextResult . toS <$> liftIO getCurrentDirectory
   Reset ->
@@ -92,17 +98,24 @@ handleCommand c = case c of
   Quit ->
     liftIO exitSuccess
 
-findCompletions :: Ide m =>
-                   [Filter] -> Matcher IdeDeclarationAnn -> Maybe P.ModuleName -> m Success
-findCompletions filters matcher currentModule = do
+findCompletions
+  :: Ide m
+  => [Filter]
+  -> Matcher IdeDeclarationAnn
+  -> Maybe P.ModuleName
+  -> CompletionOptions
+  -> m Success
+findCompletions filters matcher currentModule complOptions = do
   modules <- getAllModules currentModule
-  pure . CompletionResult . map completionFromMatch . getCompletions filters matcher $ modules
+  let insertPrim = (:) (C.Prim, idePrimDeclarations)
+  pure (CompletionResult (getCompletions filters matcher complOptions (insertPrim modules)))
 
 findType :: Ide m =>
             Text -> [Filter] -> Maybe P.ModuleName -> m Success
 findType search filters currentModule = do
   modules <- getAllModules currentModule
-  pure . CompletionResult . map completionFromMatch . getExactMatches search filters $ modules
+  let insertPrim = (:) (C.Prim, idePrimDeclarations)
+  pure (CompletionResult (getExactCompletions search filters (insertPrim modules)))
 
 findPursuitCompletions :: MonadIO m =>
                           PursuitQuery -> m Success
@@ -167,21 +180,14 @@ findAllSourceFiles = do
 -- | Looks up the ExternsFiles for the given Modulenames and loads them into the
 -- server state. Then proceeds to parse all the specified sourcefiles and
 -- inserts their ASTs into the state. Finally kicks off an async worker, which
--- populates Stage 2 and 3 of the state.
+-- populates the VolatileState.
 loadModulesAsync
   :: (Ide m, MonadError IdeError m, MonadLogger m)
   => [P.ModuleName]
   -> m Success
 loadModulesAsync moduleNames = do
   tr <- loadModules moduleNames
-
-  -- Finally we kick off the worker with @async@ and return the number of
-  -- successfully parsed modules.
-  env <- ask
-  let ll = confLogLevel (ideConfiguration env)
-  -- populateStage2 and 3 return Unit for now, so it's fine to discard this
-  -- result. We might want to block on this in a benchmarking situation.
-  _ <- liftIO (async (runLogger ll (runReaderT (populateStage2 *> populateStage3) env)))
+  _ <- populateVolatileState
   pure tr
 
 loadModulesSync
@@ -190,7 +196,7 @@ loadModulesSync
   -> m Success
 loadModulesSync moduleNames = do
   tr <- loadModules moduleNames
-  populateStage2 *> populateStage3
+  populateVolatileStateSync
   pure tr
 
 loadModules
@@ -208,9 +214,9 @@ loadModules moduleNames = do
   -- We parse all source files, log eventual parse failures and insert the
   -- successful parses into the state.
   (failures, allModules) <-
-    partitionEithers <$> (traverse parseModule =<< findAllSourceFiles)
+    partitionEithers <$> (parseModulesFromFiles =<< findAllSourceFiles)
   unless (null failures) $
-    $(logWarn) ("Failed to parse: " <> show failures)
+    logWarnN ("Failed to parse: " <> show failures)
   traverse_ insertModule allModules
 
   pure (TextResult ("Loaded " <> show (length efiles) <> " modules and "

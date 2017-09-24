@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveGeneric #-}
 -----------------------------------------------------------------------------
 --
 -- Module      : Language.PureScript.Ide.Reexports
@@ -22,7 +23,7 @@ module Language.PureScript.Ide.Reexports
   , resolveReexports'
   ) where
 
-import           Protolude
+import           Protolude hiding (moduleName)
 
 import           Control.Lens                  hiding ((&))
 import qualified Data.Map                      as Map
@@ -35,7 +36,9 @@ data ReexportResult a
   = ReexportResult
   { reResolved :: a
   , reFailed   :: [(P.ModuleName, P.DeclarationRef)]
-  } deriving (Show, Eq, Functor)
+  } deriving (Show, Eq, Functor, Generic)
+
+instance NFData a => NFData (ReexportResult a)
 
 -- | Uses the passed formatter to format the resolved module, and adds possible
 -- failures
@@ -92,9 +95,11 @@ resolveRef
   -> P.DeclarationRef
   -> Either P.DeclarationRef [IdeDeclarationAnn]
 resolveRef decls ref = case ref of
-  P.TypeRef tn mdtors ->
-    case findRef (anyOf (_IdeDeclType . ideTypeName) (== tn)) of
-      Nothing -> Left ref
+  P.TypeRef _ tn mdtors ->
+    case findRef (anyOf (_IdeDeclType . ideTypeName) (== tn))
+         <|> findRef (anyOf (_IdeDeclTypeSynonym . ideSynonymName) (== tn)) of
+      Nothing ->
+        Left ref
       Just d -> Right $ d : case mdtors of
           Nothing ->
             -- If the dataconstructor field inside the TypeRef is Nothing, that
@@ -102,14 +107,16 @@ resolveRef decls ref = case ref of
             -- those up ourselfes
             findDtors tn
           Just dtors -> mapMaybe lookupDtor dtors
-  P.ValueRef i ->
+  P.ValueRef _ i ->
     findWrapped (anyOf (_IdeDeclValue . ideValueIdent) (== i))
-  P.ValueOpRef name ->
+  P.ValueOpRef _ name ->
     findWrapped (anyOf (_IdeDeclValueOperator . ideValueOpName) (== name))
-  P.TypeOpRef name ->
+  P.TypeOpRef _ name ->
     findWrapped (anyOf (_IdeDeclTypeOperator . ideTypeOpName) (== name))
-  P.TypeClassRef name ->
+  P.TypeClassRef _ name ->
     findWrapped (anyOf (_IdeDeclTypeClass . ideTCName) (== name))
+  P.KindRef _ name ->
+    findWrapped (anyOf _IdeDeclKind (== name))
   _ ->
     Left ref
   where

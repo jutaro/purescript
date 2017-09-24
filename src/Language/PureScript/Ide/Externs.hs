@@ -24,27 +24,32 @@ import           Protolude hiding (to, from, (&))
 import           Control.Lens
 import           "monad-logger" Control.Monad.Logger
 import           Data.Aeson (decodeStrict)
+import           Data.Aeson.Types (withObject, parseMaybe, (.:))
 import qualified Data.ByteString as BS
 import           Data.Version (showVersion)
 import           Language.PureScript.Ide.Error (IdeError (..))
 import           Language.PureScript.Ide.Types
-import           Language.PureScript.Ide.Util
 
 import qualified Language.PureScript as P
 
-readExternFile :: (MonadIO m, MonadError IdeError m, MonadLogger m) =>
-                  FilePath -> m P.ExternsFile
+readExternFile
+  :: (MonadIO m, MonadError IdeError m, MonadLogger m)
+  => FilePath
+  -> m P.ExternsFile
 readExternFile fp = do
-   parseResult <- liftIO (decodeStrict <$> BS.readFile fp)
-   case parseResult of
+   externsFile <- liftIO (BS.readFile fp)
+   case decodeStrict externsFile of
      Nothing ->
-       throwError (GeneralError
-                   ("Parsing the extern at: " <> toS fp <> " failed"))
-     Just externs
-       | P.efVersion externs /= version -> do
+       let parser = withObject "ExternsFileVersion" $ \o -> o .: "efVersion"
+           maybeEFVersion = parseMaybe parser =<< decodeStrict externsFile
+       in case maybeEFVersion of
+         Nothing ->
+            throwError (GeneralError
+                        ("Parsing the extern at: " <> toS fp <> " failed"))
+         Just efVersion -> do
            let errMsg = "Version mismatch for the externs at: " <> toS fp
                         <> " Expected: " <> version
-                        <> " Found: " <> P.efVersion externs
+                        <> " Found: " <> efVersion
            logErrorN errMsg
            throwError (GeneralError errMsg)
      Just externs -> pure externs
@@ -58,8 +63,8 @@ convertExterns ef =
   where
     decls = map
       (IdeDeclarationAnn emptyAnn)
-      (resolvedDeclarations ++ operatorDecls ++ tyOperatorDecls)
-    exportDecls = mapMaybe (convertExport . unwrapPositionedRef) (P.efExports ef)
+      (resolvedDeclarations <> operatorDecls <> tyOperatorDecls)
+    exportDecls = mapMaybe convertExport (P.efExports ef)
     operatorDecls = convertOperator <$> P.efFixities ef
     tyOperatorDecls = convertTypeOperator <$> P.efTypeFixities ef
     (toResolve, declarations) =
@@ -114,35 +119,45 @@ data ToResolve
   | SynonymToResolve (P.ProperName 'P.TypeName) P.Type
 
 convertExport :: P.DeclarationRef -> Maybe (P.ModuleName, P.DeclarationRef)
-convertExport (P.ReExportRef m r) = Just (m, r)
+convertExport (P.ReExportRef _ m r) = Just (m, r)
 convertExport _ = Nothing
 
 convertDecl :: P.ExternsDeclaration -> Either ToResolve (Maybe IdeDeclaration)
-convertDecl P.EDType{..} = Right $ Just $ IdeDeclType $
-  IdeType edTypeName edTypeKind
-convertDecl P.EDTypeSynonym{..} = Left (SynonymToResolve edTypeSynonymName edTypeSynonymType)
-convertDecl P.EDDataConstructor{..} = Right $ Just $ IdeDeclDataConstructor $
-  IdeDataConstructor edDataCtorName edDataCtorTypeCtor edDataCtorType
-convertDecl P.EDValue{..} = Right $ Just $ IdeDeclValue $
-  IdeValue edValueName edValueType
-convertDecl P.EDClass{..} = Left (TypeClassToResolve edClassName)
-convertDecl P.EDKind{..} = Right (Just (IdeDeclKind edKindName))
-convertDecl P.EDInstance{} = Right Nothing
+convertDecl ed = case ed of
+  P.EDType{..} ->
+    Right (Just (IdeDeclType (IdeType edTypeName edTypeKind [])))
+  P.EDTypeSynonym{..} ->
+    Left (SynonymToResolve edTypeSynonymName edTypeSynonymType)
+  P.EDDataConstructor{..} ->
+    Right
+      (Just
+        (IdeDeclDataConstructor
+          (IdeDataConstructor edDataCtorName edDataCtorTypeCtor edDataCtorType)))
+  P.EDValue{..} ->
+    Right (Just (IdeDeclValue (IdeValue edValueName edValueType)))
+  P.EDClass{..} ->
+    Left (TypeClassToResolve edClassName)
+  P.EDKind{..} ->
+    Right (Just (IdeDeclKind edKindName))
+  P.EDInstance{} ->
+    Right Nothing
 
 convertOperator :: P.ExternsFixity -> IdeDeclaration
 convertOperator P.ExternsFixity{..} =
-  IdeDeclValueOperator $ IdeValueOperator
-    efOperator
-    efAlias
-    efPrecedence
-    efAssociativity
-    Nothing
+  IdeDeclValueOperator
+    (IdeValueOperator
+      efOperator
+      efAlias
+      efPrecedence
+      efAssociativity
+      Nothing)
 
 convertTypeOperator :: P.ExternsTypeFixity -> IdeDeclaration
 convertTypeOperator P.ExternsTypeFixity{..} =
-  IdeDeclTypeOperator $ IdeTypeOperator
-    efTypeOperator
-    efTypeAlias
-    efTypePrecedence
-    efTypeAssociativity
-    Nothing
+  IdeDeclTypeOperator
+    (IdeTypeOperator
+      efTypeOperator
+      efTypeAlias
+      efTypePrecedence
+      efTypeAssociativity
+      Nothing)

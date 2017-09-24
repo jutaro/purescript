@@ -134,6 +134,8 @@ data ExternsDeclaration =
       , edInstanceName            :: Ident
       , edInstanceTypes           :: [Type]
       , edInstanceConstraints     :: Maybe [Constraint]
+      , edInstanceChain           :: [Qualified Ident]
+      , edInstanceChainIndex      :: Integer
       }
   -- | A kind declaration
   | EDKind
@@ -152,10 +154,10 @@ applyExternsFileToEnvironment ExternsFile{..} = flip (foldl' applyDecl) efDeclar
   applyDecl env (EDValue ident ty) = env { names = M.insert (Qualified (Just efModuleName) ident) (ty, External, Defined) (names env) }
   applyDecl env (EDClass pn args members cs deps) = env { typeClasses = M.insert (qual pn) (makeTypeClassData args members cs deps) (typeClasses env) }
   applyDecl env (EDKind pn) = env { kinds = S.insert (qual pn) (kinds env) }
-  applyDecl env (EDInstance className ident tys cs) = env { typeClassDictionaries = updateMap (updateMap (M.insert (qual ident) dict) className) (Just efModuleName) (typeClassDictionaries env) }
+  applyDecl env (EDInstance className ident tys cs ch idx) = env { typeClassDictionaries = updateMap (updateMap (M.insert (qual ident) dict) className) (Just efModuleName) (typeClassDictionaries env) }
     where
     dict :: NamedDict
-    dict = TypeClassDictionaryInScope (qual ident) [] className tys cs
+    dict = TypeClassDictionaryInScope ch idx (qual ident) [] className tys cs
 
     updateMap :: (Ord k, Monoid a) => (a -> a) -> k -> M.Map k a -> M.Map k a
     updateMap f = M.alter (Just . f . fold)
@@ -178,28 +180,24 @@ moduleToExternsFile (Module ss _ mn ds (Just exps)) env = ExternsFile{..}
   efSourceSpan    = ss
 
   fixityDecl :: Declaration -> Maybe ExternsFixity
-  fixityDecl (ValueFixityDeclaration (Fixity assoc prec) name op) =
-      fmap (const (ExternsFixity assoc prec op name)) (find (findOp getValueOpRef op) exps)
-  fixityDecl (PositionedDeclaration _ _ d) = fixityDecl d
+  fixityDecl (ValueFixityDeclaration _ (Fixity assoc prec) name op) =
+    fmap (const (ExternsFixity assoc prec op name)) (find (findOp getValueOpRef op) exps)
   fixityDecl _ = Nothing
 
   typeFixityDecl :: Declaration -> Maybe ExternsTypeFixity
-  typeFixityDecl (TypeFixityDeclaration (Fixity assoc prec) name op) =
-      fmap (const (ExternsTypeFixity assoc prec op name)) (find (findOp getTypeOpRef op) exps)
-  typeFixityDecl (PositionedDeclaration _ _ d) = typeFixityDecl d
+  typeFixityDecl (TypeFixityDeclaration _ (Fixity assoc prec) name op) =
+    fmap (const (ExternsTypeFixity assoc prec op name)) (find (findOp getTypeOpRef op) exps)
   typeFixityDecl _ = Nothing
 
   findOp :: (DeclarationRef -> Maybe (OpName a)) -> OpName a -> DeclarationRef -> Bool
   findOp g op = maybe False (== op) . g
 
   importDecl :: Declaration -> Maybe ExternsImport
-  importDecl (ImportDeclaration m mt qmn) = Just (ExternsImport m mt qmn)
-  importDecl (PositionedDeclaration _ _ d) = importDecl d
+  importDecl (ImportDeclaration _ m mt qmn) = Just (ExternsImport m mt qmn)
   importDecl _ = Nothing
 
   toExternsDeclaration :: DeclarationRef -> [ExternsDeclaration]
-  toExternsDeclaration (PositionedDeclarationRef _ _ r) = toExternsDeclaration r
-  toExternsDeclaration (TypeRef pn dctors) =
+  toExternsDeclaration (TypeRef _ pn dctors) =
     case Qualified (Just mn) pn `M.lookup` types env of
       Nothing -> internalError "toExternsDeclaration: no kind in toExternsDeclaration"
       Just (kind, TypeSynonym)
@@ -211,10 +209,10 @@ moduleToExternsFile (Module ss _ mn ds (Just exps)) env = ExternsFile{..}
                             , (dty, _, ty, args) <- maybeToList (Qualified (Just mn) dctor `M.lookup` dataConstructors env)
                             ]
       _ -> internalError "toExternsDeclaration: Invalid input"
-  toExternsDeclaration (ValueRef ident)
+  toExternsDeclaration (ValueRef _ ident)
     | Just (ty, _, _) <- Qualified (Just mn) ident `M.lookup` names env
     = [ EDValue ident ty ]
-  toExternsDeclaration (TypeClassRef className)
+  toExternsDeclaration (TypeClassRef _ className)
     | Just TypeClassData{..} <- Qualified (Just mn) className `M.lookup` typeClasses env
     , Just (kind, TypeSynonym) <- Qualified (Just mn) (coerceProperName className) `M.lookup` types env
     , Just (_, synTy) <- Qualified (Just mn) (coerceProperName className) `M.lookup` typeSynonyms env
@@ -222,13 +220,13 @@ moduleToExternsFile (Module ss _ mn ds (Just exps)) env = ExternsFile{..}
       , EDTypeSynonym (coerceProperName className) typeClassArguments synTy
       , EDClass className typeClassArguments typeClassMembers typeClassSuperclasses typeClassDependencies
       ]
-  toExternsDeclaration (TypeInstanceRef ident)
-    = [ EDInstance tcdClassName ident tcdInstanceTypes tcdDependencies
+  toExternsDeclaration (TypeInstanceRef _ ident)
+    = [ EDInstance tcdClassName ident tcdInstanceTypes tcdDependencies tcdChain tcdIndex
       | m1 <- maybeToList (M.lookup (Just mn) (typeClassDictionaries env))
       , m2 <- M.elems m1
       , TypeClassDictionaryInScope{..} <- maybeToList (M.lookup (Qualified (Just mn) ident) m2)
       ]
-  toExternsDeclaration (KindRef pn)
+  toExternsDeclaration (KindRef _ pn)
     | Qualified (Just mn) pn `S.member` kinds env
     = [ EDKind pn ]
   toExternsDeclaration _ = []

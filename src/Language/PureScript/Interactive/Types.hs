@@ -12,7 +12,7 @@ import qualified Language.PureScript as P
 -- These configuration values do not change during execution.
 --
 data PSCiConfig = PSCiConfig
-  { psciLoadedFiles         :: [FilePath]
+  { psciFileGlobs           :: [String]
   , psciEnvironment         :: P.Environment
   } deriving Show
 
@@ -96,6 +96,8 @@ data Command
   | ShowInfo ReplQuery
   -- | Paste multiple lines
   | PasteLines
+  -- | Return auto-completion output as if pressing <tab>
+  | CompleteStr String
   deriving Show
 
 data ReplQuery
@@ -129,4 +131,5 @@ data Directive
   | Kind
   | Show
   | Paste
+  | Complete
   deriving (Eq, Show)

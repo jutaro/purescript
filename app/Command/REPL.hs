@@ -53,10 +53,11 @@ import           System.Directory (doesFileExist, getCurrentDirectory)
 import           System.FilePath ((</>))
 import           System.FilePath.Glob (glob)
 import           System.Process (readProcessWithExitCode)
+import qualified Data.ByteString.Lazy.UTF8 as U
 
 -- | Command line options
 data PSCiOptions = PSCiOptions
-  { psciInputFile         :: [FilePath]
+  { psciInputGlob         :: [String]
   , psciBackend           :: Backend
   }
 
@@ -206,12 +207,12 @@ browserBackend serverPort = Backend setup evaluate reload shutdown
           case Wai.pathInfo req of
             [] ->
               respond $ Wai.responseLBS status200
-                                        [(hContentType, "text/html")]
-                                        indexPage
+                                        [(hContentType, "text/html; charset=UTF-8")]
+                                        (U.fromString indexPage)
             ["js", "index.js"] ->
               respond $ Wai.responseLBS status200
                                         [(hContentType, "application/javascript")]
-                                        indexJS
+                                        (U.fromString indexJS)
             ["js", "latest.js"] -> do
               may <- readTVarIO indexJs
               case may of
@@ -224,7 +225,7 @@ browserBackend serverPort = Backend setup evaluate reload shutdown
                                             , (hPragma, "no-cache")
                                             , (hExpires, "0")
                                             ]
-                                            (fromString js)
+                                            (U.fromString js)
             ["js", "bundle.js"] -> do
               may <- readTVarIO bundleJs
               case may of
@@ -233,7 +234,7 @@ browserBackend serverPort = Backend setup evaluate reload shutdown
                 Just js ->
                   respond $ Wai.responseLBS status200
                                             [ (hContentType, "application/javascript")]
-                                            (fromString js)
+                                            (U.fromString js)
             _ -> respond $ Wai.responseLBS status404 [] "Not found"
 
       let browserState = BrowserState cmdChan shutdownVar indexJs bundleJs
@@ -309,7 +310,7 @@ command = loop <$> options
   where
     loop :: PSCiOptions -> IO ()
     loop PSCiOptions{..} = do
-        inputFiles <- concat <$> traverse glob psciInputFile
+        inputFiles <- concat <$> traverse glob psciInputGlob
         e <- runExceptT $ do
           modules <- ExceptT (loadAllModules inputFiles)
           when (null modules) . liftIO $ do
@@ -330,7 +331,7 @@ command = loop <$> options
                 historyFilename <- getHistoryFilename
                 let settings = defaultSettings { historyFile = Just historyFilename }
                     initialState = PSCiState [] [] (zip (map snd modules) externs)
-                    config = PSCiConfig inputFiles env
+                    config = PSCiConfig psciInputGlob env
                     runner = flip runReaderT config
                              . flip evalStateT initialState
                              . runInputT (setComplete completion settings)

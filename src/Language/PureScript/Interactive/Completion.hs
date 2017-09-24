@@ -3,6 +3,7 @@ module Language.PureScript.Interactive.Completion
   , liftCompletionM
   , completion
   , completion'
+  , formatCompletions
   ) where
 
 import Prelude.Compat
@@ -85,6 +86,14 @@ findCompletions prev word = do
       go _ (':' : _) = GT
       go xs ys = compare xs ys
 
+-- |
+-- Convert Haskeline completion result to results as they would be displayed
+formatCompletions :: (String, [Completion]) -> [String]
+formatCompletions (unusedR, completions) = actuals
+  where
+    unused = reverse unusedR
+    actuals = map ((unused ++) . replacement) completions
+
 data CompletionContext
   = CtxDirective String
   | CtxFilePath String
@@ -128,6 +137,7 @@ directiveArg _ Paste       = []
 directiveArg _ Show        = map CtxFixed replQueryStrings
 directiveArg _ Type        = [CtxIdentifier]
 directiveArg _ Kind        = [CtxType]
+directiveArg _ Complete    = []
 
 completeImport :: [String] -> String -> [CompletionContext]
 completeImport ws w' =
@@ -197,28 +207,25 @@ typeDecls :: P.Module -> [(N.ProperName 'N.TypeName, P.Declaration)]
 typeDecls = mapMaybe getTypeName . filter P.isDataDecl . P.exportedDeclarations
   where
   getTypeName :: P.Declaration -> Maybe (N.ProperName 'N.TypeName, P.Declaration)
-  getTypeName d@(P.TypeSynonymDeclaration name _ _) = Just (name, d)
-  getTypeName d@(P.DataDeclaration _ name _ _) = Just (name, d)
-  getTypeName (P.PositionedDeclaration _ _ d) = getTypeName d
+  getTypeName d@(P.TypeSynonymDeclaration _ name _ _) = Just (name, d)
+  getTypeName d@(P.DataDeclaration _ _ name _ _) = Just (name, d)
   getTypeName _ = Nothing
 
 identNames :: P.Module -> [(N.Ident, P.Declaration)]
 identNames = nubOnFst . concatMap getDeclNames . P.exportedDeclarations
   where
   getDeclNames :: P.Declaration -> [(P.Ident, P.Declaration)]
-  getDeclNames d@(P.ValueDeclaration ident _ _ _)  = [(ident, d)]
-  getDeclNames d@(P.TypeDeclaration ident _ ) = [(ident, d)]
-  getDeclNames d@(P.ExternDeclaration ident _) = [(ident, d)]
-  getDeclNames d@(P.TypeClassDeclaration _ _ _ _ ds) = map (second (const d)) $ concatMap getDeclNames ds
-  getDeclNames (P.PositionedDeclaration _ _ d) = getDeclNames d
+  getDeclNames d@(P.ValueDecl _ ident _ _ _)  = [(ident, d)]
+  getDeclNames d@(P.TypeDeclaration td) = [(P.tydeclIdent td, d)]
+  getDeclNames d@(P.ExternDeclaration _ ident _) = [(ident, d)]
+  getDeclNames d@(P.TypeClassDeclaration _ _ _ _ _ ds) = map (second (const d)) $ concatMap getDeclNames ds
   getDeclNames _ = []
 
 dctorNames :: P.Module -> [(N.ProperName 'N.ConstructorName, P.Declaration)]
 dctorNames = nubOnFst . concatMap go . P.exportedDeclarations
   where
   go :: P.Declaration -> [(N.ProperName 'N.ConstructorName, P.Declaration)]
-  go decl@(P.DataDeclaration _ _ _ ctors) = map ((\n -> (n, decl)) . fst) ctors
-  go (P.PositionedDeclaration _ _ d) = go d
+  go decl@(P.DataDeclaration _ _ _ _ ctors) = map ((\n -> (n, decl)) . fst) ctors
   go _ = []
 
 moduleNames :: [P.Module] -> [String]

@@ -51,17 +51,17 @@ createTemporaryModule exec PSCiState{psciImportedModules = imports, psciLetBindi
     supportImport = (supportModuleName, P.Implicit, Just (P.ModuleName [P.ProperName "$Support"]))
     eval          = P.Var (P.Qualified (Just (P.ModuleName [P.ProperName "$Support"])) (P.Ident "eval"))
     mainValue     = P.App eval (P.Var (P.Qualified Nothing (P.Ident "it")))
-    itDecl        = P.ValueDeclaration (P.Ident "it") P.Public [] [P.MkUnguarded val]
-    typeDecl      = P.TypeDeclaration (P.Ident "$main")
-                      (P.TypeApp
+    itDecl        = P.ValueDecl (internalSpan, []) (P.Ident "it") P.Public [] [P.MkUnguarded val]
+    typeDecl      = P.TypeDeclaration
+                      (P.TypeDeclarationData (internalSpan, []) (P.Ident "$main")
                         (P.TypeApp
-                          (P.TypeConstructor
-                            (P.Qualified (Just (P.ModuleName [P.ProperName "$Eff"])) (P.ProperName "Eff")))
-                              (P.TypeWildcard internalSpan))
+                          (P.TypeApp
+                            (P.TypeConstructor
+                              (P.Qualified (Just (P.ModuleName [P.ProperName "$Eff"])) (P.ProperName "Eff")))
                                 (P.TypeWildcard internalSpan))
-    mainDecl      = P.ValueDeclaration (P.Ident "$main") P.Public [] [P.MkUnguarded mainValue]
+                                  (P.TypeWildcard internalSpan)))
+    mainDecl      = P.ValueDecl (internalSpan, []) (P.Ident "$main") P.Public [] [P.MkUnguarded mainValue]
     decls         = if exec then [itDecl, typeDecl, mainDecl] else [itDecl]
-    internalSpan  = P.internalModuleSourceSpan "<internal>"
   in
     P.Module internalSpan
              [] moduleName
@@ -76,9 +76,9 @@ createTemporaryModuleForKind :: PSCiState -> P.Type -> P.Module
 createTemporaryModuleForKind PSCiState{psciImportedModules = imports, psciLetBindings = lets} typ =
   let
     moduleName = P.ModuleName [P.ProperName "$PSCI"]
-    itDecl = P.TypeSynonymDeclaration (P.ProperName "IT") [] typ
+    itDecl = P.TypeSynonymDeclaration (internalSpan, []) (P.ProperName "IT") [] typ
   in
-    P.Module (P.internalModuleSourceSpan "<internal>") [] moduleName ((importDecl `map` imports) ++ lets ++ [itDecl]) Nothing
+    P.Module internalSpan [] moduleName ((importDecl `map` imports) ++ lets ++ [itDecl]) Nothing
 
 -- |
 -- Makes a volatile module to execute the current imports.
@@ -88,13 +88,16 @@ createTemporaryModuleForImports PSCiState{psciImportedModules = imports} =
   let
     moduleName = P.ModuleName [P.ProperName "$PSCI"]
   in
-    P.Module (P.internalModuleSourceSpan "<internal>") [] moduleName (importDecl `map` imports) Nothing
+    P.Module internalSpan [] moduleName (importDecl `map` imports) Nothing
 
 importDecl :: ImportedModule -> P.Declaration
-importDecl (mn, declType, asQ) = P.ImportDeclaration mn declType asQ
+importDecl (mn, declType, asQ) = P.ImportDeclaration (internalSpan, []) mn declType asQ
 
 indexFile :: FilePath
 indexFile = ".psci_modules" ++ pathSeparator : "index.js"
 
 modulesDir :: FilePath
 modulesDir = ".psci_modules" ++ pathSeparator : "node_modules"
+
+internalSpan :: P.SourceSpan
+internalSpan = P.internalModuleSourceSpan "<internal>"

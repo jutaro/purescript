@@ -24,7 +24,7 @@ import           Control.Monad.IO.Class (MonadIO, liftIO)
 import           Control.Monad.State.Class
 import           Control.Monad.Reader.Class
 import           Control.Monad.Trans.Except (ExceptT(..), runExceptT)
-import           Control.Monad.Trans.State.Strict (StateT, runStateT)
+import           Control.Monad.Trans.State.Strict (StateT, runStateT, evalStateT)
 import           Control.Monad.Writer.Strict (Writer(), runWriter)
 
 import qualified Language.PureScript as P
@@ -40,6 +40,7 @@ import           Language.PureScript.Interactive.Types        as Interactive
 
 import           System.Directory (getCurrentDirectory)
 import           System.FilePath ((</>))
+import           System.FilePath.Glob (glob)
 
 -- | Pretty-print errors
 printErrors :: MonadIO m => P.MultipleErrors -> m ()
@@ -109,6 +110,7 @@ handleCommand _ _ p (KindOf typ)              = handleKindOf p typ
 handleCommand _ _ p (BrowseModule moduleName) = handleBrowse p moduleName
 handleCommand _ _ p (ShowInfo QueryLoaded)    = handleShowLoadedModules p
 handleCommand _ _ p (ShowInfo QueryImport)    = handleShowImportedModules p
+handleCommand _ _ p (CompleteStr prefix)      = handleComplete p prefix
 handleCommand _ _ _ _                         = P.internalError "handleCommand: unexpected command"
 
 -- | Reload the application state
@@ -118,7 +120,8 @@ handleReloadState
   -> m ()
 handleReloadState reload = do
   modify $ updateLets (const [])
-  files <- asks psciLoadedFiles
+  globs <- asks psciFileGlobs
+  files <- liftIO $ concat <$> traverse glob globs
   e <- runExceptT $ do
     modules <- ExceptT . liftIO $ loadAllModules files
     (externs, _) <- ExceptT . liftIO . runMake . make $ modules
@@ -202,26 +205,24 @@ handleShowImportedModules print' = do
   refsList refs = " (" <> commaList (mapMaybe showRef refs) <> ")"
 
   showRef :: P.DeclarationRef -> Maybe Text
-  showRef (P.TypeRef pn dctors) =
+  showRef (P.TypeRef _ pn dctors) =
     Just $ N.runProperName pn <> "(" <> maybe ".." (commaList . map N.runProperName) dctors <> ")"
-  showRef (P.TypeOpRef op) =
+  showRef (P.TypeOpRef _ op) =
     Just $ "type " <> N.showOp op
-  showRef (P.ValueRef ident) =
+  showRef (P.ValueRef _ ident) =
     Just $ N.runIdent ident
-  showRef (P.ValueOpRef op) =
+  showRef (P.ValueOpRef _ op) =
     Just $ N.showOp op
-  showRef (P.TypeClassRef pn) =
+  showRef (P.TypeClassRef _ pn) =
     Just $ "class " <> N.runProperName pn
-  showRef (P.TypeInstanceRef ident) =
+  showRef (P.TypeInstanceRef _ ident) =
     Just $ N.runIdent ident
-  showRef (P.ModuleRef name) =
+  showRef (P.ModuleRef _ name) =
     Just $ "module " <> N.runModuleName name
-  showRef (P.KindRef pn) =
+  showRef (P.KindRef _ pn) =
     Just $ "kind " <> N.runProperName pn
-  showRef (P.ReExportRef _ _) =
+  showRef (P.ReExportRef _ _ _) =
     Nothing
-  showRef (P.PositionedDeclarationRef _ _ ref) =
-    showRef ref
 
   commaList :: [Text] -> Text
   commaList = T.intercalate ", "
@@ -307,3 +308,15 @@ handleBrowse print' moduleName = do
         print' $ T.unpack $ "Module '" <> N.runModuleName modName <> "' is not valid."
     lookupUnQualifiedModName quaModName st =
         (\(modName,_,_) -> modName) <$> find ( \(_, _, mayQuaName) -> mayQuaName == Just quaModName) (psciImportedModules st)
+
+-- | Return output as would be returned by tab completion, for tools integration etc.
+handleComplete
+  :: (MonadState PSCiState m, MonadIO m)
+  => (String -> m ())
+  -> String
+  -> m ()
+handleComplete print' prefix = do
+  st <- get
+  let act = liftCompletionM (completion' (reverse prefix, ""))
+  results <- evalStateT act st
+  print' $ unlines (formatCompletions results)

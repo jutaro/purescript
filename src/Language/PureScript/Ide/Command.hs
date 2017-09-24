@@ -19,6 +19,7 @@ import           Protolude
 import           Data.Aeson
 import qualified Language.PureScript               as P
 import           Language.PureScript.Ide.CaseSplit
+import           Language.PureScript.Ide.Completion
 import           Language.PureScript.Ide.Filter
 import           Language.PureScript.Ide.Matcher
 import           Language.PureScript.Ide.Types
@@ -35,6 +36,7 @@ data Command
       { completeFilters       :: [Filter]
       , completeMatcher       :: Matcher IdeDeclarationAnn
       , completeCurrentModule :: Maybe P.ModuleName
+      , completeOptions       :: CompletionOptions
       }
     | Pursuit
       { pursuitQuery      :: PursuitQuery
@@ -54,8 +56,8 @@ data Command
       -- Import InputFile OutputFile
     | Import FilePath (Maybe FilePath) [Filter] ImportCommand
     | List { listType :: ListType }
-    | Rebuild FilePath -- ^ Rebuild the specified file using the loaded externs
-    | RebuildSync FilePath -- ^ Rebuild the specified file using the loaded externs
+    | Rebuild FilePath (Maybe FilePath)
+    | RebuildSync FilePath (Maybe FilePath)
     | Cwd
     | Reset
     | Quit
@@ -79,7 +81,8 @@ commandName c = case c of
 
 data ImportCommand
   = AddImplicitImport P.ModuleName
-  | AddImportForIdentifier Text
+  | AddQualifiedImport P.ModuleName P.ModuleName
+  | AddImportForIdentifier Text (Maybe P.ModuleName)
   deriving (Show, Eq)
 
 instance FromJSON ImportCommand where
@@ -88,8 +91,15 @@ instance FromJSON ImportCommand where
     case command of
       "addImplicitImport" ->
         AddImplicitImport <$> (P.moduleNameFromString <$> o .: "module")
+      "addQualifiedImport" ->
+        AddQualifiedImport
+          <$> (P.moduleNameFromString <$> o .: "module")
+          <*> (P.moduleNameFromString <$> o .: "qualifier")
       "addImport" ->
-        AddImportForIdentifier <$> o .: "identifier"
+        AddImportForIdentifier
+          <$> (o .: "identifier")
+          <*> (fmap P.moduleNameFromString <$> o .:? "qualifier")
+
       _ -> mzero
 
 data ListType = LoadedModules | Imports FilePath | AvailableModules
@@ -121,7 +131,7 @@ instance FromJSON Command where
         params <- o .: "params"
         Type
           <$> params .: "search"
-          <*> params .: "filters"
+          <*> params .:? "filters" .!= []
           <*> (fmap P.moduleNameFromString <$> params .:? "currentModule")
       "complete" -> do
         params <- o .: "params"
@@ -129,6 +139,7 @@ instance FromJSON Command where
           <$> params .:? "filters" .!= []
           <*> params .:? "matcher" .!= mempty
           <*> (fmap P.moduleNameFromString <$> params .:? "currentModule")
+          <*> params .:? "options" .!= defaultCompletionOptions
       "pursuit" -> do
         params <- o .: "params"
         Pursuit
@@ -158,6 +169,7 @@ instance FromJSON Command where
         params <- o .: "params"
         Rebuild
           <$> params .: "file"
+          <*> params .:? "actualFile"
       _ -> mzero
     where
       mkAnnotations True = explicitAnnotations

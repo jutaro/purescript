@@ -8,6 +8,7 @@
 module Language.PureScript.Sugar.Operators
   ( desugarSignedLiterals
   , rebracket
+  , rebracketFiltered
   , checkFixityExports
   ) where
 
@@ -68,7 +69,24 @@ rebracket
   => [ExternsFile]
   -> [Module]
   -> m [Module]
-rebracket externs modules = do
+rebracket =
+  rebracketFiltered (const True)
+
+-- |
+-- A version of `rebracket` which allows you to choose which declarations
+-- should be affected. This is used in docs generation, where we want to
+-- desugar type operators in instance declarations to ensure that instances are
+-- paired up with their types correctly, but we don't want to desugar type
+-- operators in value declarations.
+--
+rebracketFiltered
+  :: forall m
+   . MonadError MultipleErrors m
+  => (Declaration -> Bool)
+  -> [ExternsFile]
+  -> [Module]
+  -> m [Module]
+rebracketFiltered pred_ externs modules = do
   let (valueFixities, typeFixities) =
         partitionEithers
           $ concatMap externsFixities externs
@@ -84,7 +102,7 @@ rebracket externs modules = do
 
   for modules
     $ renameAliasedOperators valueAliased typeAliased
-    <=< rebracketModule valueOpTable typeOpTable
+    <=< rebracketModule pred_ valueOpTable typeOpTable
 
   where
 
@@ -110,21 +128,17 @@ rebracket externs modules = do
     -> Module
     -> m Module
   renameAliasedOperators valueAliased typeAliased (Module ss coms mn ds exts) =
-    Module ss coms mn <$> mapM f' ds <*> pure exts
+    Module ss coms mn <$> mapM (usingPredicate pred_ f') ds <*> pure exts
     where
     (goDecl', goExpr', goBinder') = updateTypes goType
     (f', _, _, _, _) =
       everywhereWithContextOnValuesM
         Nothing
-        (\pos -> uncurry goDecl <=< goDecl' pos)
+        (\_ d -> (Just (declSourceSpan d),) <$> goDecl' d)
         (\pos -> uncurry goExpr <=< goExpr' pos)
         (\pos -> uncurry goBinder <=< goBinder' pos)
         defS
         defS
-
-    goDecl :: Maybe SourceSpan -> Declaration -> m (Maybe SourceSpan, Declaration)
-    goDecl _ d@(PositionedDeclaration pos _ _) = return (Just pos, d)
-    goDecl pos other = return (pos, other)
 
     goExpr :: Maybe SourceSpan -> Expr -> m (Maybe SourceSpan, Expr)
     goExpr _ e@(PositionedValue pos _ _) = return (Just pos, e)
@@ -157,7 +171,7 @@ rebracket externs modules = do
     goBinder pos other = return (pos, other)
 
     goType :: Maybe SourceSpan -> Type -> m Type
-    goType pos = maybe id rethrowWithPosition pos . everywhereOnTypesM go
+    goType pos = maybe id rethrowWithPosition pos . go
       where
       go :: Type -> m Type
       go (BinaryNoParensType (TypeOp op) lhs rhs) =
@@ -171,16 +185,22 @@ rebracket externs modules = do
 rebracketModule
   :: forall m
    . (MonadError MultipleErrors m)
-  => [[(Qualified (OpName 'ValueOpName), Associativity)]]
+  => (Declaration -> Bool)
+  -> [[(Qualified (OpName 'ValueOpName), Associativity)]]
   -> [[(Qualified (OpName 'TypeOpName), Associativity)]]
   -> Module
   -> m Module
-rebracketModule valueOpTable typeOpTable (Module ss coms mn ds exts) =
-  Module ss coms mn <$> (map removeParens <$> parU ds f) <*> pure exts
+rebracketModule pred_ valueOpTable typeOpTable (Module ss coms mn ds exts) =
+  Module ss coms mn <$> f' ds <*> pure exts
   where
+  f' :: [Declaration] -> m [Declaration]
+  f' =
+    fmap (map (\d -> if pred_ d then removeParens d else d)) .
+    flip parU (usingPredicate pred_ f)
+
   (f, _, _) =
       everywhereOnValuesTopDownM
-        (decontextify goDecl)
+        goDecl
         (goExpr <=< decontextify goExpr')
         (goBinder <=< decontextify goBinder')
 
@@ -203,7 +223,7 @@ removeParens = f
   where
   (f, _, _) =
       everywhereOnValues
-        (decontextify goDecl)
+        (runIdentity . goDecl)
         (goExpr . decontextify goExpr')
         (goBinder . decontextify goBinder')
 
@@ -258,11 +278,10 @@ collectFixities :: Module -> [Either ValueFixityRecord TypeFixityRecord]
 collectFixities (Module _ _ moduleName ds _) = concatMap collect ds
   where
   collect :: Declaration -> [Either ValueFixityRecord TypeFixityRecord]
-  collect (PositionedDeclaration pos _ (ValueFixityDeclaration fixity name op)) =
-    [Left (Qualified (Just moduleName) op, pos, fixity, name)]
-  collect (PositionedDeclaration pos _ (TypeFixityDeclaration fixity name op)) =
-    [Right (Qualified (Just moduleName) op, pos, fixity, name)]
-  collect FixityDeclaration{} = internalError "Fixity without srcpos info"
+  collect (ValueFixityDeclaration (ss, _) fixity name op) =
+    [Left (Qualified (Just moduleName) op, ss, fixity, name)]
+  collect (TypeFixityDeclaration (ss, _) fixity name op) =
+    [Right (Qualified (Just moduleName) op, ss, fixity, name)]
   collect _ = []
 
 ensureNoDuplicates
@@ -294,38 +313,37 @@ updateTypes
   :: forall m
    . Monad m
   => (Maybe SourceSpan -> Type -> m Type)
-  -> ( Maybe SourceSpan -> Declaration  -> m (Maybe SourceSpan, Declaration)
-     , Maybe SourceSpan -> Expr         -> m (Maybe SourceSpan, Expr)
-     , Maybe SourceSpan -> Binder       -> m (Maybe SourceSpan, Binder)
+  -> ( Declaration -> m Declaration
+     , Maybe SourceSpan -> Expr -> m (Maybe SourceSpan, Expr)
+     , Maybe SourceSpan -> Binder -> m (Maybe SourceSpan, Binder)
      )
 updateTypes goType = (goDecl, goExpr, goBinder)
   where
 
   goType' :: Maybe SourceSpan -> Type -> m Type
-  goType' = everywhereOnTypesM . goType
+  goType' = everywhereOnTypesTopDownM . goType
 
-  goDecl :: Maybe SourceSpan -> Declaration -> m (Maybe SourceSpan, Declaration)
-  goDecl _ d@(PositionedDeclaration pos _ _) = return (Just pos, d)
-  goDecl pos (DataDeclaration ddt name args dctors) = do
-    dctors' <- traverse (sndM (traverse (goType' pos))) dctors
-    return (pos, DataDeclaration ddt name args dctors')
-  goDecl pos (ExternDeclaration name ty) = do
-    ty' <- goType' pos ty
-    return (pos, ExternDeclaration name ty')
-  goDecl pos (TypeClassDeclaration name args implies deps decls) = do
-    implies' <- traverse (overConstraintArgs (traverse (goType' pos))) implies
-    return (pos, TypeClassDeclaration name args implies' deps decls)
-  goDecl pos (TypeInstanceDeclaration name cs className tys impls) = do
-    cs' <- traverse (overConstraintArgs (traverse (goType' pos))) cs
-    tys' <- traverse (goType' pos) tys
-    return (pos, TypeInstanceDeclaration name cs' className tys' impls)
-  goDecl pos (TypeSynonymDeclaration name args ty) = do
-    ty' <- goType' pos ty
-    return (pos, TypeSynonymDeclaration name args ty')
-  goDecl pos (TypeDeclaration expr ty) = do
-    ty' <- goType' pos ty
-    return (pos, TypeDeclaration expr ty')
-  goDecl pos other = return (pos, other)
+  goType'' :: SourceSpan -> Type -> m Type
+  goType'' = goType' . Just
+
+  goDecl :: Declaration -> m Declaration
+  goDecl (DataDeclaration sa@(ss, _) ddt name args dctors) =
+    DataDeclaration sa ddt name args <$> traverse (sndM (traverse (goType'' ss))) dctors
+  goDecl (ExternDeclaration sa@(ss, _) name ty) =
+    ExternDeclaration sa name <$> goType'' ss ty
+  goDecl (TypeClassDeclaration sa@(ss, _) name args implies deps decls) = do
+    implies' <- traverse (overConstraintArgs (traverse (goType'' ss))) implies
+    return $ TypeClassDeclaration sa name args implies' deps decls
+  goDecl (TypeInstanceDeclaration sa@(ss, _) ch idx name cs className tys impls) = do
+    cs' <- traverse (overConstraintArgs (traverse (goType'' ss))) cs
+    tys' <- traverse (goType'' ss) tys
+    return $ TypeInstanceDeclaration sa ch idx name cs' className tys' impls
+  goDecl (TypeSynonymDeclaration sa@(ss, _) name args ty) =
+    TypeSynonymDeclaration sa name args <$> goType'' ss ty
+  goDecl (TypeDeclaration (TypeDeclarationData sa@(ss, _) expr ty)) =
+    TypeDeclaration . TypeDeclarationData sa expr <$> goType'' ss ty
+  goDecl other =
+    return other
 
   goExpr :: Maybe SourceSpan -> Expr -> m (Maybe SourceSpan, Expr)
   goExpr _ e@(PositionedValue pos _ _) = return (Just pos, e)
@@ -367,23 +385,21 @@ checkFixityExports m@(Module ss _ mn ds (Just exps)) =
   where
 
   checkRef :: DeclarationRef -> m ()
-  checkRef (PositionedDeclarationRef pos _ d) =
-    rethrowWithPosition pos $ checkRef d
-  checkRef dr@(ValueOpRef op) =
+  checkRef dr@(ValueOpRef ss' op) =
     for_ (getValueOpAlias op) $ \case
       Left ident ->
-        unless (ValueRef ident `elem` exps)
-          . throwError . errorMessage
-          $ TransitiveExportError dr [ValueRef ident]
+        unless (ValueRef ss' ident `elem` exps)
+          . throwError . errorMessage' ss'
+          $ TransitiveExportError dr [ValueRef ss' ident]
       Right ctor ->
         unless (anyTypeRef (maybe False (elem ctor) . snd))
-          . throwError . errorMessage
+          . throwError . errorMessage' ss
           $ TransitiveDctorExportError dr ctor
-  checkRef dr@(TypeOpRef op) =
+  checkRef dr@(TypeOpRef ss' op) =
     for_ (getTypeOpAlias op) $ \ty ->
       unless (anyTypeRef ((== ty) . fst))
-        . throwError . errorMessage
-        $ TransitiveExportError dr [TypeRef ty Nothing]
+        . throwError . errorMessage' ss'
+        $ TransitiveExportError dr [TypeRef ss' ty Nothing]
   checkRef _ = return ()
 
   -- Finds the name associated with a type operator when that type is also
@@ -413,3 +429,12 @@ checkFixityExports m@(Module ss _ mn ds (Just exps)) =
     :: ((ProperName 'TypeName, Maybe [ProperName 'ConstructorName]) -> Bool)
     -> Bool
   anyTypeRef f = any (maybe False f . getTypeRef) exps
+
+usingPredicate
+  :: forall f a
+   . Applicative f
+  => (a -> Bool)
+  -> (a -> f a)
+  -> (a -> f a)
+usingPredicate p f x =
+  if p x then f x else pure x

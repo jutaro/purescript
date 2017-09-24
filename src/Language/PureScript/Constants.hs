@@ -191,6 +191,11 @@ pure' = "pure"
 returnEscaped :: forall a. (IsString a) => a
 returnEscaped = "$return"
 
+unit :: forall a. (IsString a) => a
+unit = "unit"
+
+-- Core lib values
+
 untilE :: forall a. (IsString a) => a
 untilE = "untilE"
 
@@ -221,8 +226,11 @@ mkFn = "mkFn"
 runFn :: forall a. (IsString a) => a
 runFn = "runFn"
 
-unit :: forall a. (IsString a) => a
-unit = "unit"
+mkEffFn :: forall a. (IsString a) => a
+mkEffFn = "mkEffFn"
+
+runEffFn :: forall a. (IsString a) => a
+runEffFn = "runEffFn"
 
 -- Prim values
 
@@ -345,6 +353,9 @@ pattern CompareSymbol = Qualified (Just TypeDataSymbol) (ProperName "CompareSymb
 pattern AppendSymbol :: Qualified (ProperName 'ClassName)
 pattern AppendSymbol = Qualified (Just TypeDataSymbol) (ProperName "AppendSymbol")
 
+pattern ConsSymbol :: Qualified (ProperName 'ClassName)
+pattern ConsSymbol = Qualified (Just TypeDataSymbol) (ProperName "ConsSymbol")
+
 -- Type.Data.Ordering
 
 typeDataOrdering :: ModuleName
@@ -358,6 +369,20 @@ orderingEQ = Qualified (Just typeDataOrdering) (ProperName "EQ")
 
 orderingGT :: Qualified (ProperName 'TypeName)
 orderingGT = Qualified (Just typeDataOrdering) (ProperName "GT")
+
+-- Type.Row
+
+pattern TypeRow :: ModuleName
+pattern TypeRow = ModuleName [ProperName "Type", ProperName "Row"]
+
+pattern RowToList :: Qualified (ProperName 'ClassName)
+pattern RowToList = Qualified (Just TypeRow) (ProperName "RowToList")
+
+pattern RowListNil :: Qualified (ProperName 'TypeName)
+pattern RowListNil = Qualified (Just TypeRow) (ProperName "Nil")
+
+pattern RowListCons :: Qualified (ProperName 'TypeName)
+pattern RowListCons = Qualified (Just TypeRow) (ProperName "Cons")
 
 -- Main module
 
@@ -427,6 +452,9 @@ pattern ControlBind = ModuleName [ProperName "Control", ProperName "Bind"]
 controlBind :: forall a. (IsString a) => a
 controlBind = "Control_Bind"
 
+controlMonadEffUncurried :: forall a. (IsString a) => a
+controlMonadEffUncurried = "Control_Monad_Eff_Uncurried"
+
 dataBounded :: forall a. (IsString a) => a
 dataBounded = "Data_Bounded"
 
@@ -465,3 +493,9 @@ partialUnsafe = "Partial_Unsafe"
 
 unsafePartial :: forall a. (IsString a) => a
 unsafePartial = "unsafePartial"
+
+unsafeCoerce :: forall a. (IsString a) => a
+unsafeCoerce = "Unsafe_Coerce"
+
+unsafeCoerceFn :: forall a. (IsString a) => a
+unsafeCoerceFn = "unsafeCoerce"

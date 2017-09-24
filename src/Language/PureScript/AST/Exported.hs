@@ -4,10 +4,12 @@ module Language.PureScript.AST.Exported
   ) where
 
 import Prelude.Compat
+import Protolude (sortBy, on)
 
 import Control.Category ((>>>))
 
 import Data.Maybe (mapMaybe)
+import qualified Data.Map as M
 
 import Language.PureScript.AST.Declarations
 import Language.PureScript.Types
@@ -24,6 +26,10 @@ import Language.PureScript.Names
 -- produce incorrect results if this is not the case - for example, type class
 -- instances will be incorrectly removed in some cases.
 --
+-- The returned declarations are in the same order as they appear in the export
+-- list, unless there is no export list, in which case they appear in the same
+-- order as they do in the source file.
+--
 exportedDeclarations :: Module -> [Declaration]
 exportedDeclarations (Module _ _ mn decls exps) = go decls
   where
@@ -31,6 +37,7 @@ exportedDeclarations (Module _ _ mn decls exps) = go decls
         >>> filter (isExported exps)
         >>> map (filterDataConstructors exps)
         >>> filterInstances mn exps
+        >>> maybe id reorder exps
 
 -- |
 -- Filter out all data constructors from a declaration which are not exported.
@@ -38,11 +45,9 @@ exportedDeclarations (Module _ _ mn decls exps) = go decls
 -- it unchanged.
 --
 filterDataConstructors :: Maybe [DeclarationRef] -> Declaration -> Declaration
-filterDataConstructors exps (DataDeclaration dType tyName tyArgs dctors) =
-  DataDeclaration dType tyName tyArgs $
+filterDataConstructors exps (DataDeclaration sa dType tyName tyArgs dctors) =
+  DataDeclaration sa dType tyName tyArgs $
     filter (isDctorExported tyName exps . fst) dctors
-filterDataConstructors exps (PositionedDeclaration srcSpan coms d) =
-  PositionedDeclaration srcSpan coms (filterDataConstructors exps d)
 filterDataConstructors _ other = other
 
 -- |
@@ -85,20 +90,18 @@ filterInstances mn (Just exps) =
   checkQual q = isQualified q && not (isQualifiedWith mn q)
 
   typeName :: DeclarationRef -> Maybe (ProperName 'TypeName)
-  typeName (TypeRef n _) = Just n
-  typeName (PositionedDeclarationRef _ _ r) = typeName r
+  typeName (TypeRef _ n _) = Just n
   typeName _ = Nothing
 
   typeClassName :: DeclarationRef -> Maybe (ProperName 'ClassName)
-  typeClassName (TypeClassRef n) = Just n
-  typeClassName (PositionedDeclarationRef _ _ r) = typeClassName r
+  typeClassName (TypeClassRef _ n) = Just n
   typeClassName _ = Nothing
 
 -- |
 -- Get all type and type class names referenced by a type instance declaration.
 --
 typeInstanceConstituents :: Declaration -> [Either (Qualified (ProperName 'ClassName)) (Qualified (ProperName 'TypeName))]
-typeInstanceConstituents (TypeInstanceDeclaration _ constraints className tys _) =
+typeInstanceConstituents (TypeInstanceDeclaration _ _ _ _ constraints className tys _) =
   Left className : (concatMap fromConstraint constraints ++ concatMap fromType tys)
   where
 
@@ -111,7 +114,6 @@ typeInstanceConstituents (TypeInstanceDeclaration _ constraints className tys _)
   go (ConstrainedType c _) = fromConstraint c
   go _ = []
 
-typeInstanceConstituents (PositionedDeclaration _ _ d) = typeInstanceConstituents d
 typeInstanceConstituents _ = []
 
 
@@ -124,22 +126,9 @@ typeInstanceConstituents _ = []
 isExported :: Maybe [DeclarationRef] -> Declaration -> Bool
 isExported Nothing _ = True
 isExported _ TypeInstanceDeclaration{} = True
-isExported exps (PositionedDeclaration _ _ d) = isExported exps d
-isExported (Just exps) decl = any (matches decl) exps
+isExported (Just exps) decl = any matches exps
   where
-  matches (TypeDeclaration ident _) (ValueRef ident') = ident == ident'
-  matches (ValueDeclaration ident _ _ _) (ValueRef ident') = ident == ident'
-  matches (ExternDeclaration ident _) (ValueRef ident') = ident == ident'
-  matches (DataDeclaration _ ident _ _) (TypeRef ident' _) = ident == ident'
-  matches (ExternDataDeclaration ident _) (TypeRef ident' _) = ident == ident'
-  matches (ExternKindDeclaration ident) (KindRef ident') = ident == ident'
-  matches (TypeSynonymDeclaration ident _ _) (TypeRef ident' _) = ident == ident'
-  matches (TypeClassDeclaration ident _ _ _ _) (TypeClassRef ident') = ident == ident'
-  matches (ValueFixityDeclaration _ _ op) (ValueOpRef op') = op == op'
-  matches (TypeFixityDeclaration _ _ op) (TypeOpRef op') = op == op'
-  matches (PositionedDeclaration _ _ d) r = d `matches` r
-  matches d (PositionedDeclarationRef _ _ r) = d `matches` r
-  matches _ _ = False
+  matches declRef = declName decl == Just (declRefName declRef)
 
 -- |
 -- Test if a data constructor for a given type is exported, given a module's
@@ -149,7 +138,19 @@ isDctorExported :: ProperName 'TypeName -> Maybe [DeclarationRef] -> ProperName 
 isDctorExported _ Nothing _ = True
 isDctorExported ident (Just exps) ctor = test `any` exps
   where
-  test (PositionedDeclarationRef _ _ d) = test d
-  test (TypeRef ident' Nothing) = ident == ident'
-  test (TypeRef ident' (Just ctors)) = ident == ident' && ctor `elem` ctors
+  test (TypeRef _ ident' Nothing) = ident == ident'
+  test (TypeRef _ ident' (Just ctors)) = ident == ident' && ctor `elem` ctors
   test _ = False
+
+-- |
+-- Reorder declarations based on the order they appear in the given export
+-- list.
+--
+reorder :: [DeclarationRef] -> [Declaration] -> [Declaration]
+reorder refs =
+  sortBy (compare `on` refIndex)
+  where
+  refIndices =
+    M.fromList $ zip (map declRefName refs) [(0::Int)..]
+  refIndex decl =
+    declName decl >>= flip M.lookup refIndices

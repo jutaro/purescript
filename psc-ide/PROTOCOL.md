@@ -1,10 +1,16 @@
 # Protocol
 
-Encode the following JSON formats into a single line string and pass them to
-`psc-ide-client`s stdin. You can then read the result from `psc-ide-client`s
-stdout as a single line. The result needs to be unwrapped from the "wrapper"
-which separates success from failure. This wrapper is described at the end of
-this document.
+Communication with `purs ide server` is via a JSON protocol over a TCP connection:
+the server listens on a particular (configurable) port, and will accept a single line
+of JSON input in the format described below, terminated by a newline, before giving 
+a JSON response and closing the connection.
+
+The `purs ide client` command can be used as a wrapper for the TCP connection, but
+otherwise behaves the same, accepting a line of JSON on stdin and exiting after
+giving a result on stdout.
+
+The result needs to be unwrapped from the "wrapper" which separates success
+from failure. This wrapper is described at the end of this document.
 
 ## Command:
 ### Load
@@ -59,23 +65,31 @@ The `complete` command looks up possible completions/corrections.
 **Params**:
  - `filters :: [Filter]`: The same as for the `type` command. A candidate must
   match all filters.
+
  - `matcher :: (optional) Matcher`: The strategy used for matching candidates
   after filtering. Results are scored internally and will be returned in the
   descending order where the nth element is better then the n+1-th.
+  If no matcher is given every candidate, that passes the filters, is returned
+  in no particular order.
+
  - `currentModule :: (optional) String`: The current modules name. If it matches
    with the rebuild cache non-exported modules will also be completed. You can
    fill the rebuild cache by using the "Rebuild" command.
 
-  If no matcher is given every candidate, that passes the filters, is returned
-  in no particular order.
+ - `options :: (optional) CompletionOptions`: The CompletionOptions to apply to
+   the completion results
 
 ```json
 {
   "command": "complete",
   "params": {
     "filters": [{..}, {..}],
-    "matcher": {..}
-    "currentModule": "Main"
+    "matcher": {..},
+    "currentModule": "Main",
+    "options": {
+      "maxResults": 50,
+      "groupReexports": true
+    }
   }
 }
 ```
@@ -100,7 +114,8 @@ couldn't be extracted from a source file.
     "start": [1, 3],
     "end": [3, 1]
     },
-  "documentation": "A filtering function"
+  "documentation": "A filtering function",
+  "exportedFrom": ["Data.Array"]
   }
 ]
 ```
@@ -209,7 +224,7 @@ Example:
 This command just adds an unqualified import for the given modulename.
 
 Arguments:
-- `moduleName :: String`
+- `module :: String`
 
 Example:
 ```json
@@ -224,6 +239,30 @@ Example:
   }
 }
 ```
+
+#### Subcommand `addQualifiedImport`
+
+This command adds an import for the given modulename and qualifier.
+
+Arguments:
+- `module :: String`
+- `qualifier :: String`
+
+Example:
+```json
+{
+  "command": "import",
+  "params": {
+    "file": "/home/creek/Documents/chromacannon/src/Main.purs",
+    "importCommand": {
+      "importCommand": "addQualifiedImport",
+      "module": "Data.Array",
+      "qualifier": "Array"
+    }
+  }
+}
+```
+
 #### Subcommand `addImport`
 
 This command takes an identifier and searches the currently loaded modules for
@@ -232,13 +271,14 @@ match it adds the import and returns. If it finds more than one match it
 responds with a list of the found matches as completions like the complete
 command.
 
-You can also supply a list of filters like the ones for completion. This way you
-can narrow down the search to a certain module and resolve the case in which
+You can also supply a list of filters like the ones for completion. These are
+specified as part of the top level command rather than within the `importCommand`.
+This way you can narrow down the search to a certain module and resolve the case in which
 more then one match was found.
 
 Arguments:
-- `moduleName :: String`
-- `filters :: [Filter]`
+- `identifier :: String`
+- `qualifier :: String` (optional)
 
 Example:
 ```json
@@ -255,6 +295,28 @@ Example:
 }
 ```
 
+Example with qualifier and filter:
+```json
+{
+  "command": "import",
+  "params": {
+    "file": "/home/creek/Documents/chromacannon/src/Demo.purs",
+    "outfile": "/home/creek/Documents/chromacannon/src/Demo.purs",
+    "importCommand": {
+      "importCommand": "addImport",
+      "identifier": "length",
+      "qualifier": "Array"
+    },
+    "filters": [{
+      "filter": "modules",
+      "params": {
+        "modules": ["Data.Array"]
+      }
+    }]
+  }
+}
+```
+
 ### Rebuild
 
 The `rebuild` command provides a fast rebuild for a single module. It doesn't
@@ -264,12 +326,16 @@ identifiers.
 
 Arguments:
   - `file :: String` the path to the module to rebuild
+  - `actualFile :: Maybe String` Specifies the path to be used for location
+    information and parse errors. This is useful in case a temp file is used as
+    the source for a rebuild.
 
 ```json
 {
   "command": "rebuild",
   "params": {
     "file": "/path/to/file.purs"
+    "actualFile": "/path/to/actualFile.purs"
   }
 }
 ```
@@ -515,6 +581,56 @@ and in any of their dependencies/imports.
 }
 ```
 
+### Namespace filter
+The Namespace filter only keeps identifiers that appear in the listed namespaces.
+Valid namespaces are `value`, `type` and `kind`.
+
+```json
+{
+   "filter": "namespace",
+   "params": {
+     "namespaces": ["value", "type", "kind"]
+   }
+}
+```
+
+### Declaration type filter
+A filter which allows to filter type declarations. Valid type declarations are
+`value`, `type`, `synonym`, `dataconstructor`, `typeclass`, `valueoperator`,
+`typeoperator` and `kind`.
+
+```json
+{
+  "filter": "declarations",
+  "params": [
+    {
+      "declarationtype": "value"
+    },
+    {
+      "declarationtype": "type"
+    },
+    {
+      "declarationtype": "synonym"
+    },
+    {
+      "declarationtype": "dataconstructor"
+    }
+    {
+      "declarationtype": "typeclass"
+    },
+    {
+      "declarationtype": "valueoperator"
+    },
+    {
+      "declarationtype": "typeoperator"
+    },
+    {
+      "declarationtype": "kind"
+    }
+  ]
+}
+```
+
 ## Matcher:
 
 ### Flex matcher
@@ -561,6 +677,22 @@ All Responses are wrapped in the following format:
   "result": Result|Error
 }
 ```
+
+## CompletionOptions
+
+Completion options allow to configure the number of returned completion results.
+
+- maxResults :: Maybe Int
+
+If specified limits the number of completion results, otherwise return all
+results.
+
+- groupReexports :: Maybe Boolean (defaults to False)
+
+If set to True, groups all reexports of an identifier under the module it
+originated from (the original export is also treated as a "reexport"). These
+reexports then populate the `exportedFrom` field in their completion results and
+the `module` field contains the originating module.
 
 ### Error
 

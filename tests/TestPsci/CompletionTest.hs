@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module TestPsci.CompletionTest where
 
 import Prelude ()
@@ -11,33 +12,33 @@ import           Data.List (sort)
 import qualified Data.Text as T
 import qualified Language.PureScript as P
 import           Language.PureScript.Interactive
-import           System.Console.Haskeline
 import           TestPsci.TestEnv (initTestPSCiEnv)
-import           TestUtils (supportModules)
+import           TestUtils (getSupportModuleNames)
 
 completionTests :: Spec
-completionTests = context "completionTests" $
-  mapM_ assertCompletedOk completionTestData
+completionTests = context "completionTests" $ do
+  mns <- runIO $ getSupportModuleNames
+  mapM_ assertCompletedOk (completionTestData mns)
 
 -- If the cursor is at the right end of the line, with the 1st element of the
 -- pair as the text in the line, then pressing tab should offer all the
 -- elements of the list (which is the 2nd element) as completions.
-completionTestData :: [(String, [String])]
-completionTestData =
+completionTestData :: [T.Text] -> [(String, [String])]
+completionTestData supportModuleNames =
   -- basic directives
   [ (":h",  [":help"])
   , (":r",  [":reload"])
-  , (":c",  [":clear"])
+  , (":c",  [":clear", ":complete"])
   , (":q",  [":quit"])
   , (":b",  [":browse"])
 
   -- :browse should complete module names
-  , (":b Control.Monad.E",    map (":b Control.Monad.Eff" ++) ["", ".Unsafe", ".Class", ".Console", ".Uncurried"])
-  , (":b Control.Monad.Eff.", map (":b Control.Monad.Eff" ++) [".Unsafe", ".Class", ".Console", ".Uncurried"])
+  , (":b Control.Monad.E",    map (":b Control.Monad.Eff" ++) ["", ".Unsafe", ".Class", ".Console", ".Uncurried", ".Ref", ".Ref.Unsafe"])
+  , (":b Control.Monad.Eff.", map (":b Control.Monad.Eff" ++) [".Unsafe", ".Class", ".Console", ".Uncurried", ".Ref", ".Ref.Unsafe"])
 
   -- import should complete module names
-  , ("import Control.Monad.E",    map ("import Control.Monad.Eff" ++) ["", ".Unsafe", ".Class", ".Console", ".Uncurried"])
-  , ("import Control.Monad.Eff.", map ("import Control.Monad.Eff" ++) [".Unsafe", ".Class", ".Console", ".Uncurried"])
+  , ("import Control.Monad.E",    map ("import Control.Monad.Eff" ++) ["", ".Unsafe", ".Class", ".Console", ".Uncurried", ".Ref", ".Ref.Unsafe"])
+  , ("import Control.Monad.Eff.", map ("import Control.Monad.Eff" ++) [".Unsafe", ".Class", ".Console", ".Uncurried", ".Ref", ".Ref.Unsafe"])
 
   -- :quit, :help, :reload, :clear should not complete
   , (":help ", [])
@@ -65,7 +66,7 @@ completionTestData =
 
   -- a few other import tests
   , ("impor", ["import"])
-  , ("import ", map ("import " ++) supportModules)
+  , ("import ", map (T.unpack . mappend "import ") supportModuleNames)
   , ("import Prelude ", [])
 
   -- String and number literals should not be completed
@@ -86,10 +87,9 @@ completionTestData =
 
 assertCompletedOk :: (String, [String]) -> Spec
 assertCompletedOk (line, expecteds) = specify line $ do
-  (unusedR, completions) <- runCM (completion' (reverse line, ""))
-  let unused = reverse unusedR
-  let actuals = map ((unused ++) . replacement) completions
-  sort expecteds `shouldBe` sort actuals
+  results <- runCM (completion' (reverse line, ""))
+  let actuals = formatCompletions results
+  sort actuals `shouldBe` sort expecteds
 
 runCM :: CompletionM a -> IO a
 runCM act = do
@@ -99,10 +99,10 @@ runCM act = do
 getPSCiStateForCompletion :: IO PSCiState
 getPSCiStateForCompletion = do
   (PSCiState _ bs es, _) <- initTestPSCiEnv
-  let imports = [controlMonadSTasST, (P.ModuleName [P.ProperName (T.pack "Prelude")], P.Implicit, Nothing)]
+  let imports = [controlMonadSTasST, (P.ModuleName [P.ProperName "Prelude"], P.Implicit, Nothing)]
   return $ PSCiState imports bs es
 
 controlMonadSTasST :: ImportedModule
 controlMonadSTasST = (s "Control.Monad.ST", P.Implicit, Just (s "ST"))
   where
-  s = P.moduleNameFromString . T.pack
+  s = P.moduleNameFromString

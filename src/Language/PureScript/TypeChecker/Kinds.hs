@@ -86,10 +86,10 @@ unifyKinds k1 k2 = do
   go (KUnknown u) k = solveKind u k
   go k (KUnknown u) = solveKind u k
   go (NamedKind k1') (NamedKind k2') | k1' == k2' = return ()
-  go (Row k1') (Row k2') = go k1' k2'
+  go (Row k1') (Row k2') = unifyKinds k1' k2'
   go (FunKind k1' k2') (FunKind k3 k4) = do
-    go k1' k3
-    go k2' k4
+    unifyKinds k1' k3
+    unifyKinds k2' k4
   go k1' k2' = throwError . errorMessage $ KindsDoNotUnify k1' k2'
 
 -- | Infer the kind of a single type
@@ -256,6 +256,9 @@ infer' other = (, []) <$> go other
     k2 <- go row
     unifyKinds k2 (Row k1)
     return $ Row k1
+  go (ProxyType ty) = do
+    _ <- go ty
+    return kindType
   go (ConstrainedType (Constraint className tys _) ty) = do
     k1 <- go $ foldl TypeApp (TypeConstructor (fmap coerceProperName className)) tys
     unifyKinds k1 kindType
