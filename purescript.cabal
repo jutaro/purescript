@@ -1,9 +1,9 @@
--- This file has been generated from package.yaml by hpack version 0.17.0.
+-- This file has been generated from package.yaml by hpack version 0.18.1.
 --
 -- see: https://github.com/sol/hpack
 
 name:           purescript
-version:        0.11.4
+version:        0.11.6
 cabal-version:  >= 1.10
 build-type:     Simple
 license:        BSD3
@@ -24,18 +24,22 @@ extra-source-files:
       app/static/index.js
       app/static/normalize.css
       app/static/pursuit.css
+      app/static/pursuit.less
       CONTRIBUTING.md
       CONTRIBUTORS.md
       examples/docs/bower.json
       examples/docs/bower_components/purescript-prelude/src/Prelude.purs
       examples/docs/resolutions.json
+      examples/docs/src/ChildDeclOrder.purs
       examples/docs/src/Clash.purs
       examples/docs/src/Clash1.purs
       examples/docs/src/Clash1a.purs
       examples/docs/src/Clash2.purs
       examples/docs/src/Clash2a.purs
       examples/docs/src/ConstrainedArgument.purs
-      examples/docs/src/DesugarLet.purs
+      examples/docs/src/DeclOrder.purs
+      examples/docs/src/DeclOrderNoExportList.purs
+      examples/docs/src/Desugar.purs
       examples/docs/src/DocComments.purs
       examples/docs/src/DuplicateNames.purs
       examples/docs/src/Example.purs
@@ -75,6 +79,8 @@ extra-source-files:
       examples/failing/1881.purs
       examples/failing/2128-class.purs
       examples/failing/2128-instance.purs
+      examples/failing/2197-shouldFail.purs
+      examples/failing/2197-shouldFail2.purs
       examples/failing/2378.purs
       examples/failing/2378/Lib.purs
       examples/failing/2379.purs
@@ -86,6 +92,10 @@ extra-source-files:
       examples/failing/2601.purs
       examples/failing/2616.purs
       examples/failing/2806.purs
+      examples/failing/2874-forall.purs
+      examples/failing/2874-forall2.purs
+      examples/failing/2874-wildcard.purs
+      examples/failing/2947.purs
       examples/failing/365.purs
       examples/failing/438.purs
       examples/failing/881.purs
@@ -129,6 +139,7 @@ extra-source-files:
       examples/failing/DeclConflictTypeClass.purs
       examples/failing/DeclConflictTypeSynonym.purs
       examples/failing/DeclConflictTypeType.purs
+      examples/failing/DeriveOldGeneric.purs
       examples/failing/DiffKindsSameName.purs
       examples/failing/DiffKindsSameName/LibA.purs
       examples/failing/DiffKindsSameName/LibB.purs
@@ -182,9 +193,14 @@ extra-source-files:
       examples/failing/ImportModule.purs
       examples/failing/ImportModule/M2.purs
       examples/failing/InfiniteKind.purs
+      examples/failing/InfiniteKind2.purs
       examples/failing/InfiniteType.purs
       examples/failing/InstanceExport.purs
       examples/failing/InstanceExport/InstanceExport.purs
+      examples/failing/InstanceSigsBodyIncorrect.purs
+      examples/failing/InstanceSigsDifferentTypes.purs
+      examples/failing/InstanceSigsIncorrectType.purs
+      examples/failing/InstanceSigsOrphanTypeDeclaration.purs
       examples/failing/IntOutOfRange.purs
       examples/failing/InvalidDerivedInstance.purs
       examples/failing/InvalidDerivedInstance2.purs
@@ -233,9 +249,12 @@ extra-source-files:
       examples/failing/OrphanTypeDecl.purs
       examples/failing/OverlappingArguments.purs
       examples/failing/OverlappingBinders.purs
+      examples/failing/OverlappingInstances.purs
       examples/failing/OverlappingVars.purs
       examples/failing/ProgrammableTypeErrors.purs
       examples/failing/ProgrammableTypeErrorsTypeString.purs
+      examples/failing/ProxyKind.purs
+      examples/failing/ProxyUnify.purs
       examples/failing/Rank2Types.purs
       examples/failing/RequiredHiddenType.purs
       examples/failing/Reserved.purs
@@ -295,6 +314,8 @@ extra-source-files:
       examples/passing/2138/Lib.purs
       examples/passing/2172.js
       examples/passing/2172.purs
+      examples/passing/2197-1.purs
+      examples/passing/2197-2.purs
       examples/passing/2252.purs
       examples/passing/2288.purs
       examples/passing/2378.purs
@@ -305,15 +326,19 @@ extra-source-files:
       examples/passing/2626.purs
       examples/passing/2663.purs
       examples/passing/2689.purs
-      examples/passing/2695.purs
       examples/passing/2756.purs
       examples/passing/2787.purs
       examples/passing/2795.purs
       examples/passing/2806.purs
+      examples/passing/2947.purs
+      examples/passing/2958.purs
+      examples/passing/2972.purs
       examples/passing/652.purs
       examples/passing/810.purs
       examples/passing/862.purs
       examples/passing/922.purs
+      examples/passing/Ado.purs
+      examples/passing/AppendInReverse.purs
       examples/passing/Applicative.purs
       examples/passing/ArrayType.purs
       examples/passing/Auto.purs
@@ -354,6 +379,8 @@ extra-source-files:
       examples/passing/Dollar.purs
       examples/passing/DuplicateProperties.purs
       examples/passing/Eff.purs
+      examples/passing/EffFn.js
+      examples/passing/EffFn.purs
       examples/passing/EmptyDataDecls.purs
       examples/passing/EmptyRow.purs
       examples/passing/EmptyTypeClass.purs
@@ -399,6 +426,9 @@ extra-source-files:
       examples/passing/ImportQualified/M1.purs
       examples/passing/InferRecFunWithConstrainedArgument.purs
       examples/passing/InstanceBeforeClass.purs
+      examples/passing/InstanceChain.purs
+      examples/passing/InstanceSigs.purs
+      examples/passing/InstanceSigsGeneral.purs
       examples/passing/IntAndChar.purs
       examples/passing/iota.purs
       examples/passing/JSReserved.purs
@@ -475,9 +505,6 @@ extra-source-files:
       examples/passing/OperatorSections.purs
       examples/passing/OptimizerBug.purs
       examples/passing/OptionalQualified.purs
-      examples/passing/OverlappingInstances.purs
-      examples/passing/OverlappingInstances2.purs
-      examples/passing/OverlappingInstances3.purs
       examples/passing/ParensInTypedBinder.purs
       examples/passing/PartialFunction.purs
       examples/passing/Patterns.purs
@@ -490,6 +517,7 @@ extra-source-files:
       examples/passing/PolyLabels.js
       examples/passing/PolyLabels.purs
       examples/passing/PrimedTypeName.purs
+      examples/passing/Proxy.purs
       examples/passing/QualifiedNames.purs
       examples/passing/QualifiedNames/Either.purs
       examples/passing/QualifiedQualifiedImports.purs
@@ -521,6 +549,7 @@ extra-source-files:
       examples/passing/RowsInInstanceContext.purs
       examples/passing/RowUnion.js
       examples/passing/RowUnion.purs
+      examples/passing/RunFnInline.purs
       examples/passing/RuntimeScopeIssue.purs
       examples/passing/s.purs
       examples/passing/ScopedTypeVariables.purs
@@ -574,6 +603,7 @@ extra-source-files:
       examples/passing/UnifyInTypeInstanceLookup.purs
       examples/passing/Unit.purs
       examples/passing/UnknownInTypeClassLookup.purs
+      examples/passing/UnsafeCoerce.purs
       examples/passing/UntupledConstraints.purs
       examples/passing/UsableTypeClassMethods.purs
       examples/passing/UTF8Sourcefile.purs
@@ -597,7 +627,10 @@ extra-source-files:
       examples/warning/ImplicitImport.purs
       examples/warning/ImplicitQualifiedImport.purs
       examples/warning/MissingTypeDeclaration.purs
-      examples/warning/OverlappingInstances.purs
+      examples/warning/NewtypeInstance.purs
+      examples/warning/NewtypeInstance2.purs
+      examples/warning/NewtypeInstance3.purs
+      examples/warning/NewtypeInstance4.purs
       examples/warning/OverlappingPattern.purs
       examples/warning/ScopeShadowing.purs
       examples/warning/ShadowedBinderPatternGuard.purs
@@ -649,12 +682,12 @@ flag release
 
 library
     build-depends:
-          aeson >=1.0 && <1.1
+          aeson >=1.0 && <1.3
         , aeson-better-errors >=0.8
         , ansi-terminal >=0.6.2 && <0.7
         , base >=4.8 && <5
         , base-compat >=0.6.0
-        , blaze-html >=0.8.1 && <0.9
+        , blaze-html >=0.8.1 && <0.10
         , bower-json >=1.0.0.1 && <1.1
         , boxes >=0.1.4 && <0.2.0
         , bytestring
@@ -666,9 +699,10 @@ library
         , directory >=1.2.3
         , dlist
         , edit-distance
+        , file-embed
         , filepath
         , fsnotify >=0.2.1
-        , Glob >=0.7 && <0.8
+        , Glob >=0.7 && <0.9
         , haskeline >=0.7.0.0
         , http-client >=0.4.30 && <0.6.0
         , http-types
@@ -683,7 +717,7 @@ library
         , pattern-arrows >=0.0.2 && <0.1
         , pipes >=4.0.0 && <4.4.0
         , pipes-http
-        , process >=1.2.0 && <1.5
+        , process >=1.2.0 && <1.7
         , protolude >=0.1.6
         , regex-tdfa
         , safe >=0.3.9 && <0.4
@@ -693,6 +727,7 @@ library
         , spdx ==0.2.*
         , split
         , stm >=0.2.4.0
+        , stringsearch
         , syb
         , text
         , time
@@ -717,7 +752,7 @@ library
           Language.PureScript.AST.Traversals
           Language.PureScript.Bundle
           Language.PureScript.Bundle.BundleOpt
-          Language.PureScript.Bundle.BundleTypes          
+          Language.PureScript.Bundle.BundleTypes
           Language.PureScript.CodeGen
           Language.PureScript.CodeGen.JS
           Language.PureScript.CodeGen.JS.Common
@@ -749,6 +784,7 @@ library
           Language.PureScript.Docs.Convert
           Language.PureScript.Docs.Convert.ReExports
           Language.PureScript.Docs.Convert.Single
+          Language.PureScript.Docs.Css
           Language.PureScript.Docs.ParseInPackage
           Language.PureScript.Docs.Prim
           Language.PureScript.Docs.Render
@@ -762,6 +798,7 @@ library
           Language.PureScript.Errors
           Language.PureScript.Errors.JSON
           Language.PureScript.Externs
+          Language.PureScript.Hierarchy
           Language.PureScript.Ide
           Language.PureScript.Ide.CaseSplit
           Language.PureScript.Ide.Command
@@ -769,9 +806,11 @@ library
           Language.PureScript.Ide.Error
           Language.PureScript.Ide.Externs
           Language.PureScript.Ide.Filter
+          Language.PureScript.Ide.Filter.Declaration
           Language.PureScript.Ide.Imports
           Language.PureScript.Ide.Logging
           Language.PureScript.Ide.Matcher
+          Language.PureScript.Ide.Prim
           Language.PureScript.Ide.Pursuit
           Language.PureScript.Ide.Rebuild
           Language.PureScript.Ide.Reexports
@@ -817,6 +856,7 @@ library
           Language.PureScript.Publish.Utils
           Language.PureScript.Renamer
           Language.PureScript.Sugar
+          Language.PureScript.Sugar.AdoNotation
           Language.PureScript.Sugar.BindingGroups
           Language.PureScript.Sugar.CaseDeclarations
           Language.PureScript.Sugar.DoNotation
@@ -859,12 +899,12 @@ library
 
 executable purs
     build-depends:
-          aeson >=1.0 && <1.1
+          aeson >=1.0 && <1.3
         , aeson-better-errors >=0.8
         , ansi-terminal >=0.6.2 && <0.7
         , base >=4.8 && <5
         , base-compat >=0.6.0
-        , blaze-html >=0.8.1 && <0.9
+        , blaze-html >=0.8.1 && <0.10
         , bower-json >=1.0.0.1 && <1.1
         , boxes >=0.1.4 && <0.2.0
         , bytestring
@@ -876,9 +916,10 @@ executable purs
         , directory >=1.2.3
         , dlist
         , edit-distance
+        , file-embed
         , filepath
         , fsnotify >=0.2.1
-        , Glob >=0.7 && <0.8
+        , Glob >=0.7 && <0.9
         , haskeline >=0.7.0.0
         , http-client >=0.4.30 && <0.6.0
         , http-types
@@ -893,7 +934,7 @@ executable purs
         , pattern-arrows >=0.0.2 && <0.1
         , pipes >=4.0.0 && <4.4.0
         , pipes-http
-        , process >=1.2.0 && <1.5
+        , process >=1.2.0 && <1.7
         , protolude >=0.1.6
         , regex-tdfa
         , safe >=0.3.9 && <0.4
@@ -903,6 +944,7 @@ executable purs
         , spdx ==0.2.*
         , split
         , stm >=0.2.4.0
+        , stringsearch
         , syb
         , text
         , time
@@ -920,12 +962,12 @@ executable purs
         , wai ==3.*
         , wai-websockets ==3.*
         , warp ==3.*
-        , websockets >=0.9 && <0.11
+        , websockets >=0.9 && <0.13
     if flag(release)
         cpp-options: -DRELEASE
     else
         build-depends:
-              gitrev >=1.2.0 && <1.3
+              gitrev >=1.2.0 && <1.4
     main-is: Main.hs
     hs-source-dirs:
           app
@@ -941,18 +983,19 @@ executable purs
           Command.Ide
           Command.Publish
           Command.REPL
+          Paths_purescript
           Version
     default-language: Haskell2010
     ghc-options: -Wall -O2 -fno-warn-unused-do-bind -threaded -rtsopts -with-rtsopts=-N
 
 test-suite tests
     build-depends:
-          aeson >=1.0 && <1.1
+          aeson >=1.0 && <1.3
         , aeson-better-errors >=0.8
         , ansi-terminal >=0.6.2 && <0.7
         , base >=4.8 && <5
         , base-compat >=0.6.0
-        , blaze-html >=0.8.1 && <0.9
+        , blaze-html >=0.8.1 && <0.10
         , bower-json >=1.0.0.1 && <1.1
         , boxes >=0.1.4 && <0.2.0
         , bytestring
@@ -964,9 +1007,10 @@ test-suite tests
         , directory >=1.2.3
         , dlist
         , edit-distance
+        , file-embed
         , filepath
         , fsnotify >=0.2.1
-        , Glob >=0.7 && <0.8
+        , Glob >=0.7 && <0.9
         , haskeline >=0.7.0.0
         , http-client >=0.4.30 && <0.6.0
         , http-types
@@ -981,7 +1025,7 @@ test-suite tests
         , pattern-arrows >=0.0.2 && <0.1
         , pipes >=4.0.0 && <4.4.0
         , pipes-http
-        , process >=1.2.0 && <1.5
+        , process >=1.2.0 && <1.7
         , protolude >=0.1.6
         , regex-tdfa
         , safe >=0.3.9 && <0.4
@@ -991,6 +1035,7 @@ test-suite tests
         , spdx ==0.2.*
         , split
         , stm >=0.2.4.0
+        , stringsearch
         , syb
         , text
         , time
@@ -1009,6 +1054,7 @@ test-suite tests
     type: exitcode-stdio-1.0
     main-is: Main.hs
     other-modules:
+          Language.PureScript.Ide.CompletionSpec
           Language.PureScript.Ide.FilterSpec
           Language.PureScript.Ide.ImportsSpec
           Language.PureScript.Ide.MatcherSpec
@@ -1020,6 +1066,7 @@ test-suite tests
           PscIdeSpec
           TestCompiler
           TestDocs
+          TestHierarchy
           TestPrimDocs
           TestPsci
           TestPsci.CommandTest
