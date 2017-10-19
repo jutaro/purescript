@@ -86,7 +86,6 @@ If you would prefer to use different terms, please use the section below instead
 | [@phiggins](https://github.com/phiggins) | Pete Higgins | [MIT license](http://opensource.org/licenses/MIT) |
 | [@philopon](https://github.com/philopon) | Hirotomo Moriwaki | [MIT license](http://opensource.org/licenses/MIT) |
 | [@pseudonom](https://github.com/pseudonom) | Eric Easley | [MIT license](http://opensource.org/licenses/MIT) |
-| [@quesebifurcan](https://github.com/quesebifurcan) | Fredrik Wallberg | [MIT license](http://opensource.org/licenses/MIT) |
 | [@rightfold](https://github.com/rightfold) | rightfold | [MIT license](https://opensource.org/licenses/MIT) |
 | [@robdaemon](https://github.com/robdaemon) | Robert Roland | [MIT license](http://opensource.org/licenses/MIT) |
 | [@RossMeikleham](https://github.com/RossMeikleham) | Ross Meikleham | [MIT license](http://opensource.org/licenses/MIT) |
@@ -112,7 +111,8 @@ If you would prefer to use different terms, please use the section below instead
 | [@vkorablin](https://github.com/vkorablin) | Vladimir Korablin | MIT license |
 | [@zudov](https://github.com/zudov) | Konstantin Zudov | [MIT license](http://opensource.org/licenses/MIT) |
 | [@b123400](https://github.com/b123400) | b123400 | [MIT license](https://opensource.org/licenses/MIT) |
-| [@kcsongor](https://github.com/kcsongor) | Csongor Kiss | [MIT license](http://opensource.org/licenses/MIT) |
+| [@drets](https://github.com/drets) | Dmytro Rets | [MIT license](http://opensource.org/licenses/MIT) |
+| [@bjornmelgaaard](https://github.com/BjornMelgaard) | Sergey Homa | [MIT license](http://opensource.org/licenses/MIT) |
 
 ### Contributors using Modified Terms
 
