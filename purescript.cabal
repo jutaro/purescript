@@ -1,9 +1,11 @@
--- This file has been generated from package.yaml by hpack version 0.18.1.
+-- This file has been generated from package.yaml by hpack version 0.27.0.
 --
 -- see: https://github.com/sol/hpack
+--
+-- hash: 0e16f822cc3491cd6070e1a5e19aa94df54196482d472b6b7a3c29529222e5b2
 
 name:           purescript
-version:        0.11.6
+version:        0.11.7
 cabal-version:  >= 1.10
 build-type:     Simple
 license:        BSD3
@@ -147,9 +149,11 @@ extra-source-files:
       examples/failing/DoNotSuggestComposition.purs
       examples/failing/DoNotSuggestComposition2.purs
       examples/failing/DuplicateDeclarationsInLet.purs
+      examples/failing/DuplicateInstance.purs
       examples/failing/DuplicateModule.purs
       examples/failing/DuplicateModule/M1.purs
       examples/failing/DuplicateProperties.purs
+      examples/failing/DuplicateTypeClass.purs
       examples/failing/DuplicateTypeVars.purs
       examples/failing/Eff.purs
       examples/failing/EmptyCase.purs
@@ -333,6 +337,7 @@ extra-source-files:
       examples/passing/2947.purs
       examples/passing/2958.purs
       examples/passing/2972.purs
+      examples/passing/3125.purs
       examples/passing/652.purs
       examples/passing/810.purs
       examples/passing/862.purs
@@ -505,6 +510,7 @@ extra-source-files:
       examples/passing/OperatorSections.purs
       examples/passing/OptimizerBug.purs
       examples/passing/OptionalQualified.purs
+      examples/passing/ParensInType.purs
       examples/passing/ParensInTypedBinder.purs
       examples/passing/PartialFunction.purs
       examples/passing/Patterns.purs
@@ -657,6 +663,7 @@ extra-source-files:
       tests/support/package.json
       tests/support/prelude-resolutions.json
       tests/support/psci/Sample.purs
+      tests/support/pscide/src/CompletionSpecDocs.purs
       tests/support/pscide/src/ImportsSpec.purs
       tests/support/pscide/src/ImportsSpec1.purs
       tests/support/pscide/src/MatcherSpec.purs
@@ -682,7 +689,8 @@ flag release
 
 library
     build-depends:
-          aeson >=1.0 && <1.3
+          Glob >=0.7 && <0.9
+        , aeson >=1.0 && <1.3
         , aeson-better-errors >=0.8
         , ansi-terminal >=0.6.2 && <0.7
         , base >=4.8 && <5
@@ -702,7 +710,6 @@ library
         , file-embed
         , filepath
         , fsnotify >=0.2.1
-        , Glob >=0.7 && <0.9
         , haskeline >=0.7.0.0
         , http-client >=0.4.30 && <0.6.0
         , http-types
@@ -899,9 +906,11 @@ library
 
 executable purs
     build-depends:
-          aeson >=1.0 && <1.3
+          Glob >=0.7 && <0.9
+        , aeson >=1.0 && <1.3
         , aeson-better-errors >=0.8
         , ansi-terminal >=0.6.2 && <0.7
+        , ansi-wl-pprint
         , base >=4.8 && <5
         , base-compat >=0.6.0
         , blaze-html >=0.8.1 && <0.10
@@ -919,7 +928,6 @@ executable purs
         , file-embed
         , filepath
         , fsnotify >=0.2.1
-        , Glob >=0.7 && <0.9
         , haskeline >=0.7.0.0
         , http-client >=0.4.30 && <0.6.0
         , http-types
@@ -929,6 +937,8 @@ executable purs
         , monad-control >=1.0.0.0 && <1.1
         , monad-logger >=0.3 && <0.4
         , mtl >=2.1.0 && <2.3.0
+        , network
+        , optparse-applicative >=0.13.0
         , parallel >=3.2 && <3.3
         , parsec >=3.1.10
         , pattern-arrows >=0.0.2 && <0.1
@@ -936,6 +946,7 @@ executable purs
         , pipes-http
         , process >=1.2.0 && <1.7
         , protolude >=0.1.6
+        , purescript
         , regex-tdfa
         , safe >=0.3.9 && <0.4
         , scientific >=0.3.4.9 && <0.4
@@ -954,11 +965,6 @@ executable purs
         , unordered-containers
         , utf8-string >=1 && <2
         , vector
-        , ansi-wl-pprint
-        , file-embed
-        , network
-        , optparse-applicative >=0.13.0
-        , purescript
         , wai ==3.*
         , wai-websockets ==3.*
         , warp ==3.*
@@ -990,7 +996,9 @@ executable purs
 
 test-suite tests
     build-depends:
-          aeson >=1.0 && <1.3
+          Glob >=0.7 && <0.9
+        , HUnit
+        , aeson >=1.0 && <1.3
         , aeson-better-errors >=0.8
         , ansi-terminal >=0.6.2 && <0.7
         , base >=4.8 && <5
@@ -1010,8 +1018,9 @@ test-suite tests
         , file-embed
         , filepath
         , fsnotify >=0.2.1
-        , Glob >=0.7 && <0.9
         , haskeline >=0.7.0.0
+        , hspec
+        , hspec-discover
         , http-client >=0.4.30 && <0.6.0
         , http-types
         , language-javascript >=0.6.0.9 && <0.7
@@ -1027,10 +1036,12 @@ test-suite tests
         , pipes-http
         , process >=1.2.0 && <1.7
         , protolude >=0.1.6
+        , purescript
         , regex-tdfa
         , safe >=0.3.9 && <0.4
         , scientific >=0.3.4.9 && <0.4
         , semigroups >=0.16.2 && <0.19
+        , silently
         , sourcemap >=0.1.6
         , spdx ==0.2.*
         , split
@@ -1045,11 +1056,6 @@ test-suite tests
         , unordered-containers
         , utf8-string >=1 && <2
         , vector
-        , purescript
-        , hspec
-        , hspec-discover
-        , HUnit
-        , silently
     ghc-options: -Wall
     type: exitcode-stdio-1.0
     main-is: Main.hs
@@ -1076,6 +1082,7 @@ test-suite tests
           TestPscIde
           TestPscPublish
           TestUtils
+          Paths_purescript
     default-language: Haskell2010
     hs-source-dirs:
           tests

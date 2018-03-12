@@ -116,16 +116,17 @@ addValue moduleName name ty nameKind = do
 addTypeClass
   :: forall m
    . (MonadState CheckState m, MonadError MultipleErrors m)
-  => Qualified (ProperName 'ClassName)
+  => ModuleName
+  -> ProperName 'ClassName
   -> [(Text, Maybe Kind)]
   -> [Constraint]
   -> [FunctionalDependency]
   -> [Declaration]
   -> m ()
-addTypeClass qualifiedClassName args implies dependencies ds = do
+addTypeClass moduleName pn args implies dependencies ds = do
   env <- getEnv
   traverse_ (checkMemberIsUsable (typeSynonyms env)) classMembers
-  modify $ \st -> st { checkEnv = (checkEnv st) { typeClasses = M.insert qualifiedClassName newClass (typeClasses . checkEnv $ st) } }
+  modify $ \st -> st { checkEnv = (checkEnv st) { typeClasses = M.insert (Qualified (Just moduleName) pn) newClass (typeClasses . checkEnv $ st) } }
   where
     classMembers :: [(Ident, Type)]
     classMembers = map toPair ds
@@ -314,21 +315,12 @@ typeCheckAll moduleName _ = traverse go
     return d
   go d@FixityDeclaration{} = return d
   go d@ImportDeclaration{} = return d
-  go d@(TypeClassDeclaration (ss, _) pn args implies deps tys) = do
-    warnAndRethrow (addHint (ErrorInTypeClassDeclaration pn) . addHint (PositionedError ss)) $ do
-      env <- getEnv
-      let qualifiedClassName = Qualified (Just moduleName) pn
-      guardWith (errorMessage (DuplicateTypeClass pn ss)) $
-        not (M.member qualifiedClassName (typeClasses env))
-      addTypeClass qualifiedClassName args implies deps tys
-      return d
-  go (d@(TypeInstanceDeclaration (ss, _) dictName deps className tys body)) =
+  go d@(TypeClassDeclaration _ pn args implies deps tys) = do
+    addTypeClass moduleName pn args implies deps tys
+    return d
+  go (d@(TypeInstanceDeclaration (ss, _) ch idx dictName deps className tys body)) =
     rethrow (addHint (ErrorInInstance className tys) . addHint (PositionedError ss)) $ do
       env <- getEnv
-      let qualifiedDictName = Qualified (Just moduleName) dictName
-      flip (traverse_ . traverse_) (typeClassDictionaries env) $ \dictionaries ->
-        guardWith (errorMessage (DuplicateInstance dictName ss)) $
-          not (M.member qualifiedDictName dictionaries)
       case M.lookup className (typeClasses env) of
         Nothing -> internalError "typeCheckAll: Encountered unknown type class in instance declaration"
         Just typeClass -> do
@@ -337,7 +329,7 @@ typeCheckAll moduleName _ = traverse go
           checkOrphanInstance dictName className typeClass tys
           _ <- traverseTypeInstanceBody checkInstanceMembers body
           deps' <- (traverse . overConstraintArgs . traverse) replaceAllTypeSynonyms deps
-          let dict = TypeClassDictionaryInScope qualifiedDictName [] className tys (Just deps')
+          let dict = TypeClassDictionaryInScope (Qualified (Just moduleName) <$> ch) idx (Qualified (Just moduleName) dictName) [] className tys (Just deps')
           addTypeClassDictionaries (Just moduleName) . M.singleton className $ M.singleton (tcdValue dict) dict
           return d
 
